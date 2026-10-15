@@ -105,6 +105,11 @@ fn run(args: &[String]) -> Result<()> {
     let exe = PsxExe::parse(&fs.read(&mut disc, &exe_entry)?)?;
 
     let mut psx = Psx::new(&bios, std);
+    match opt(args, "--engine").unwrap_or("interp") {
+        "recomp" => psx.set_engine(dwrc_recomp::new_engine(dwrc_recomp::Mode::Native)),
+        "validate" => psx.set_engine(dwrc_recomp::new_engine(dwrc_recomp::Mode::Validate)),
+        _ => {}
+    }
     psx.bus.tty_echo = tty;
     psx.insert_disc(Box::new(disc) as Box<dyn SectorSource>, region);
     if fast {
@@ -158,9 +163,10 @@ fn run(args: &[String]) -> Result<()> {
     if let Some(dir) = &shots {
         save_vram(&dir.join("vram.png"), &psx)?;
     }
-    if !psx.bus.tty.is_empty() {
+    if flag(args, "--tty") && !psx.bus.tty.is_empty() {
         println!("--- TTY ---\n{}", psx.bus.tty);
     }
+    println!("engine: {} {}", psx.engine_name(), psx.engine_report());
     Ok(())
 }
 

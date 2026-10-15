@@ -6,7 +6,7 @@
 //! with the far-color vector, the "garbage" matrix, H sign-extension on
 //! read, ...).
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Gte {
     // Data registers
     pub v: [[i16; 3]; 3],

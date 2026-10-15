@@ -25,7 +25,35 @@ pub mod exc {
     pub const OV: u32 = 0x0C;
 }
 
-#[derive(Debug, Clone, Default)]
+/// The memory interface the CPU core executes against. Implemented by the
+/// real [`Bus`] and by the recompiler's replay bus used for validation.
+pub trait CpuBus {
+    fn read(&mut self, addr: u32, w: Width) -> u32;
+    fn write(&mut self, addr: u32, v: u32, w: Width);
+    fn cycles(&mut self) -> &mut u64;
+    fn irq_line(&self) -> bool;
+}
+
+impl CpuBus for Bus {
+    #[inline(always)]
+    fn read(&mut self, addr: u32, w: Width) -> u32 {
+        Bus::read(self, addr, w)
+    }
+    #[inline(always)]
+    fn write(&mut self, addr: u32, v: u32, w: Width) {
+        Bus::write(self, addr, v, w)
+    }
+    #[inline(always)]
+    fn cycles(&mut self) -> &mut u64 {
+        &mut self.cycles
+    }
+    #[inline(always)]
+    fn irq_line(&self) -> bool {
+        self.irq.line()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Cop0 {
     pub bpc: u32,
     pub bda: u32,
@@ -70,8 +98,8 @@ pub struct Cpu {
     icache_tag: [u32; 256],
     icache_valid: [u8; 256],
     icache_data: [u32; 1024],
-    muldiv_ready: u64,
-    gte_ready: u64,
+    pub muldiv_ready: u64,
+    pub gte_ready: u64,
     /// Capture BIOS putchar (B0:3D / A0:3C) into `bus.tty`.
     pub trace_tty: bool,
     pub instructions: u64,
@@ -167,8 +195,8 @@ impl Cpu {
         self.next_load_reg = 0;
     }
 
-    pub fn cause_with_irq(&self, bus: &Bus) -> u32 {
-        (self.cop0.cause & !(1 << 10)) | ((bus.irq.line() as u32) << 10)
+    pub fn cause_with_irq<B: CpuBus>(&self, bus: &B) -> u32 {
+        (self.cop0.cause & !(1 << 10)) | ((bus.irq_line() as u32) << 10)
     }
 
     #[inline(always)]
@@ -261,6 +289,15 @@ impl Cpu {
         }
     }
 
+    /// Charges instruction-fetch timing for `count` instructions starting at
+    /// `pc` through the instruction cache model (used by the recompiler so
+    /// translated code keeps the interpreter's timing).
+    pub fn icache_touch(&mut self, bus: &mut Bus, pc: u32, count: u32) {
+        for k in 0..count {
+            self.fetch(bus, pc.wrapping_add(k * 4));
+        }
+    }
+
     #[inline(always)]
     fn read_code(bus: &Bus, phys: u32) -> u32 {
         if phys < 0x80_0000 {
@@ -275,7 +312,7 @@ impl Cpu {
     }
 
     /// Invalidates the icache line holding `addr` (store with cache isolated).
-    fn icache_isolated_store(&mut self, addr: u32) {
+    pub fn icache_isolated_store(&mut self, addr: u32) {
         let line = ((addr >> 4) & 0xFF) as usize;
         self.icache_valid[line] = 0;
     }
@@ -305,17 +342,33 @@ impl Cpu {
         if bus.has_hooks && bus.hook_at(pc) && bus.run_hook(self, pc) == HookAction::Redirect {
             return;
         }
+        self.exec_one(bus);
+    }
+
+    /// Fetches and executes the instruction at `pc` without checking
+    /// interrupts or hooks.
+    #[inline]
+    pub fn exec_one(&mut self, bus: &mut Bus) {
+        let pc = self.pc;
         if self.trace_tty && (pc == 0xA0 || pc == 0xB0) {
             self.trace_bios_call(bus, pc);
         }
-        self.current_pc = pc;
         if pc & 3 != 0 {
+            self.current_pc = pc;
             self.cop0.bad_vaddr = pc;
             let d = self.next_in_delay;
             self.exception(exc::ADEL, pc, d, 0);
             return;
         }
         let instr = Instr(self.fetch(bus, pc));
+        self.exec_instr(bus, instr);
+    }
+
+    /// Executes an already-fetched instruction at `pc`: delay-slot
+    /// bookkeeping, execution and load-delay retirement.
+    #[inline(always)]
+    pub fn exec_instr<B: CpuBus>(&mut self, bus: &mut B, instr: Instr) {
+        self.current_pc = self.pc;
         self.pc = self.next_pc;
         self.next_pc = self.pc.wrapping_add(4);
         self.in_delay_slot = self.next_in_delay;
@@ -352,15 +405,17 @@ impl Cpu {
         self.next_in_delay = true;
     }
 
-    fn muldiv_stall(&mut self, bus: &mut Bus) {
-        if bus.cycles < self.muldiv_ready {
-            bus.cycles = self.muldiv_ready;
+    fn muldiv_stall<B: CpuBus>(&mut self, bus: &mut B) {
+        let c = bus.cycles();
+        if *c < self.muldiv_ready {
+            *c = self.muldiv_ready;
         }
     }
 
-    fn gte_stall(&mut self, bus: &mut Bus) {
-        if bus.cycles < self.gte_ready {
-            bus.cycles = self.gte_ready;
+    fn gte_stall<B: CpuBus>(&mut self, bus: &mut B) {
+        let c = bus.cycles();
+        if *c < self.gte_ready {
+            *c = self.gte_ready;
         }
     }
 
@@ -377,7 +432,7 @@ impl Cpu {
     }
 
     #[inline(always)]
-    fn load(&mut self, bus: &mut Bus, addr: u32, w: Width) -> Option<u32> {
+    fn load<B: CpuBus>(&mut self, bus: &mut B, addr: u32, w: Width) -> Option<u32> {
         if addr & (w as u32 - 1) != 0 {
             self.cop0.bad_vaddr = addr;
             self.raise(exc::ADEL);
@@ -387,7 +442,7 @@ impl Cpu {
     }
 
     #[inline(always)]
-    fn store(&mut self, bus: &mut Bus, addr: u32, v: u32, w: Width) {
+    fn store<B: CpuBus>(&mut self, bus: &mut B, addr: u32, v: u32, w: Width) {
         if addr & (w as u32 - 1) != 0 {
             self.cop0.bad_vaddr = addr;
             self.raise(exc::ADES);
@@ -397,13 +452,10 @@ impl Cpu {
             self.icache_isolated_store(addr);
             return;
         }
-        if (addr & 0x1FFF_FFF0) == 0x1F80_1800 {
-            log::trace!("pc {:08x} store{} [{addr:08x}] = {v:08x}", self.current_pc, w as u32 * 8);
-        }
         bus.write(addr, v, w);
     }
 
-    pub fn execute(&mut self, bus: &mut Bus, i: Instr) {
+    pub fn execute<B: CpuBus>(&mut self, bus: &mut B, i: Instr) {
         let rs = i.rs();
         let rt = i.rt();
         let rd = i.rd();
@@ -443,13 +495,13 @@ impl Cpu {
                 self.hi = (r >> 32) as u32;
                 self.lo = r as u32;
                 let a = if (s as i32) < 0 { !s } else { s };
-                self.muldiv_ready = bus.cycles + mult_cycles(a);
+                self.muldiv_ready = *bus.cycles() + mult_cycles(a);
             }
             Op::Multu => {
                 let r = (s as u64) * (t as u64);
                 self.hi = (r >> 32) as u32;
                 self.lo = r as u32;
-                self.muldiv_ready = bus.cycles + mult_cycles(s);
+                self.muldiv_ready = *bus.cycles() + mult_cycles(s);
             }
             Op::Div => {
                 let n = s as i32;
@@ -464,7 +516,7 @@ impl Cpu {
                     self.hi = (n % d) as u32;
                     self.lo = (n / d) as u32;
                 }
-                self.muldiv_ready = bus.cycles + 36;
+                self.muldiv_ready = *bus.cycles() + 36;
             }
             Op::Divu => {
                 if t == 0 {
@@ -474,7 +526,7 @@ impl Cpu {
                     self.hi = s % t;
                     self.lo = s / t;
                 }
-                self.muldiv_ready = bus.cycles + 36;
+                self.muldiv_ready = *bus.cycles() + 36;
             }
             Op::Add => match (s as i32).checked_add(t as i32) {
                 Some(v) => self.set_reg(rd, v as u32),
@@ -608,7 +660,7 @@ impl Cpu {
             Op::Cop2Cmd => {
                 self.gte_stall(bus);
                 let c = self.gte.execute(i.0);
-                self.gte_ready = bus.cycles + c as u64;
+                self.gte_ready = *bus.cycles() + c as u64;
             }
             Op::Lwc2 => {
                 let addr = s.wrapping_add(i.simm());

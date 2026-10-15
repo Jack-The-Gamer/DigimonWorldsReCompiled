@@ -1,6 +1,6 @@
 [package]
 name = "dwrc-recomp"
-description = "Static recompiler: MIPS analysis and Cranelift native code generation"
+description = "Static recompiler: MIPS R3000A to native code via Cranelift, with interpreter-backed validation"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,3 +9,8 @@ license.workspace = true
 dwrc-psx.workspace = true
 dwrc-mips.workspace = true
 log.workspace = true
+cranelift-codegen = "=0.120.0"
+cranelift-frontend = "=0.120.0"
+cranelift-jit = "=0.120.0"
+cranelift-module = "=0.120.0"
+cranelift-native = "=0.120.0"

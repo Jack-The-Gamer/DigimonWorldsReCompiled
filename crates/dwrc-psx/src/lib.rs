@@ -22,7 +22,7 @@ pub mod spu;
 pub mod timers;
 
 pub use bus::Bus;
-pub use cpu::Cpu;
+pub use cpu::{Cpu, CpuBus};
 pub use pad::{Button, PadState};
 
 /// CPU clock in Hz (identical on NTSC and PAL consoles).
@@ -48,6 +48,10 @@ pub trait ExecEngine: Send {
     /// while the cache is isolated, explicit invalidation).
     fn invalidate(&mut self, _start: u32, _len: u32) {}
     fn name(&self) -> &'static str;
+    /// Human-readable statistics (shown by tools).
+    fn report(&self) -> String {
+        String::new()
+    }
 }
 
 /// The reference interpreter engine.
@@ -97,6 +101,10 @@ impl Psx {
 
     pub fn engine_name(&self) -> &'static str {
         self.engine.name()
+    }
+
+    pub fn engine_report(&self) -> String {
+        self.engine.report()
     }
 
     pub fn reset(&mut self) {

@@ -147,6 +147,7 @@ pub struct Bus {
     hook_bits: Box<[u64]>,
     hooks: HashMap<u32, PcHook>,
     pub has_hooks: bool,
+    hooks_version: u64,
     /// Set by hooks/debuggers to make the engine return early.
     pub stop_requested: bool,
 
@@ -191,6 +192,7 @@ impl Bus {
             hook_bits: vec![0u64; RAM_SIZE / 4 / 64].into_boxed_slice(),
             hooks: HashMap::new(),
             has_hooks: false,
+            hooks_version: 0,
             stop_requested: false,
             tty: String::new(),
             tty_echo: false,
@@ -372,6 +374,7 @@ impl Bus {
         self.hook_bits[w / 64] |= 1 << (w % 64);
         self.hooks.insert(phys, hook);
         self.has_hooks = true;
+        self.hooks_version += 1;
     }
 
     pub fn remove_hook(&mut self, vaddr: u32) {
@@ -380,6 +383,7 @@ impl Bus {
         self.hook_bits[w / 64] &= !(1 << (w % 64));
         self.hooks.remove(&phys);
         self.has_hooks = !self.hooks.is_empty();
+        self.hooks_version += 1;
     }
 
     #[inline(always)]
@@ -438,8 +442,17 @@ impl Bus {
                 inv.lo = inv.lo.min(start);
                 inv.hi = inv.hi.max(end);
             }
-            self.stop_requested = true;
         }
+    }
+
+    #[inline(always)]
+    pub fn has_invalidation(&self) -> bool {
+        self.invalidation.any
+    }
+
+    /// Bumped whenever PC hooks are added or removed.
+    pub fn hooks_version(&self) -> u64 {
+        self.hooks_version
     }
 
     pub fn take_code_invalidation(&mut self) -> Option<(u32, u32)> {
