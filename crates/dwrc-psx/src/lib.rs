@@ -19,6 +19,7 @@ pub mod memcard;
 pub mod pad;
 pub mod sio;
 pub mod spu;
+mod spu_gauss;
 pub mod timers;
 
 pub use bus::Bus;

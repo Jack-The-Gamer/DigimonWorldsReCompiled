@@ -20,29 +20,8 @@ const REVERB_FIR: [i32; 39] = [
     -616, 0, 266, 0, -103, 0, 35, 0, -10, 0, 2, 0, -1,
 ];
 
-/// 512-entry interpolation table. The console uses a fixed ROM table with
-/// a gaussian-like shape; this is generated from a gaussian kernel and
-/// normalised the same way (the four taps sum to ~0x7F80).
 fn gauss_table() -> &'static [i32; 512] {
-    static T: std::sync::OnceLock<[i32; 512]> = std::sync::OnceLock::new();
-    T.get_or_init(|| {
-        let sigma = 0.56f64;
-        let k = |d: f64| (-(d * d) / (2.0 * sigma * sigma)).exp();
-        let mut t = [0i32; 512];
-        for i in 0..256 {
-            let f = i as f64 / 256.0;
-            // Weights for s[-3], s[-2], s[-1], s[0] relative to position f
-            // between s[-2] and s[-1].
-            let w = [k(1.0 + f), k(f), k(1.0 - f), k(2.0 - f)];
-            let sum: f64 = w.iter().sum();
-            let scale = 32640.0 / sum;
-            t[0xFF - i] = (w[0] * scale).round() as i32;
-            t[0x1FF - i] = (w[1] * scale).round() as i32;
-            t[0x100 + i] = (w[2] * scale).round() as i32;
-            t[i] = (w[3] * scale).round() as i32;
-        }
-        t
-    })
+    &crate::spu_gauss::GAUSS
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

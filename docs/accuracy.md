@@ -10,14 +10,15 @@
 
 ## Modelled from hardware documentation
 
+The SPU's 4-point interpolation uses the console's exact 512-entry table; a unit test checks the table's defining property (every 4-tap set sums to 0x7F80 ±1).
+
 These follow the nocash PSX specification and Mednafen's hardware-tested behaviour, and match it as far as tested here: CPU pipeline effects, COP0 and exceptions, instruction cache, memory timing, GTE (bit-exact), GPU rasterisation rules, DMA, timers, MDEC decoding, SPU envelopes/ADPCM/reverb, CD-ROM command behaviour, controller and memory-card protocols.
 
 ## Known approximations (to be replaced)
 
 | Area | Current state | Effect |
 |---|---|---|
-| SPU 4-point interpolation table | Generated from a Gaussian kernel, normalised like the hardware's 512-entry ROM table | Very slightly different high-frequency response in sampled music/SFX. Inaudible in practice, but not bit-exact. |
-| XA-ADPCM resampling coefficients | Same 7-phase × 29-tap structure as the hardware's "zigzag" tables, windowed-sinc coefficients | Same as above, for streamed music and FMV audio. |
+| XA-ADPCM resampling coefficients | Same 7-phase × 29-tap structure as the hardware's "zigzag" tables, windowed-sinc coefficients | Very slightly different high-frequency response in streamed music and FMV audio; inaudible in practice, but not bit-exact. |
 | MDEC IDCT rounding | nocash formulation with 16-bit-per-pass rounding | Occasional ±1 differences in FMV pixel values. |
 | GPU drawing time | Drawing completes instantly (no GPU busy time) | Games are never GPU-bound here, so scenes that slowed down on hardware because of fill rate may run slightly smoother. |
 | CD-ROM seek time | Distance-based model (Mednafen formula) | Loading pauses are close to hardware but not identical. |
