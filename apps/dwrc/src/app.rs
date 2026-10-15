@@ -612,11 +612,11 @@ impl App {
                 }
                 if on {
                     if let Some(pos) = gm.enabled.iter().position(|e| e == &id) {
-                        if ui.small_button("▲").clicked() && pos > 0 {
+                        if ui.small_button("Up").clicked() && pos > 0 {
                             gm.enabled.swap(pos, pos - 1);
                             changed = true;
                         }
-                        if ui.small_button("▼").clicked() && pos + 1 < gm.enabled.len() {
+                        if ui.small_button("Down").clicked() && pos + 1 < gm.enabled.len() {
                             gm.enabled.swap(pos, pos + 1);
                             changed = true;
                         }

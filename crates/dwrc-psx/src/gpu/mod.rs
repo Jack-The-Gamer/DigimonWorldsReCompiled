@@ -489,7 +489,7 @@ impl Gpu {
                     let last_color = if shaded { self.cmd[2] } else { self.cmd[0] };
                     let last_vtx = *self.cmd.last().unwrap();
                     self.cmd.clear();
-                    self.cmd.push((self.cmd_header_op_color(op, last_color)) | 0);
+                    self.cmd.push(self.cmd_header_op_color(op, last_color));
                     self.cmd.push(last_vtx);
                     return;
                 }

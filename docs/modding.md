@@ -1,0 +1,130 @@
+# Modding guide
+
+A mod is a folder with a `mod.toml` file. Put mod folders in your mods folder:
+
+```
+<data folder>/mods/dw1/<your-mod>/mod.toml     # Digimon World
+<data folder>/mods/dw2/<your-mod>/mod.toml     # Digimon World 2
+<data folder>/mods/dw3/<your-mod>/mod.toml     # Digimon World 3 / 2003
+<data folder>/mods/any/<your-mod>/mod.toml     # mods for every game
+```
+
+(The **Open mods folder** button in the mod manager takes you there.) Mods shipped with the program live in the `mods/` folder next to it; a mod in your folder with the same `id` takes precedence.
+
+Enable, order and configure mods from the game's **Mods** button in the launcher, or press **F10** while playing. Enabled mods load top to bottom; later mods win when two touch the same thing. Changes take effect when the game (re)starts.
+
+## `mod.toml`
+
+```toml
+[mod]
+id = "my-mod"                # letters, digits, '-' and '_'
+name = "My Mod"
+version = "1.0.0"
+author = "you"
+description = "What it does."
+game = "dw1"                 # dw1 | dw2 | dw3 | any
+serials = ["SLUS-01032"]     # optional: only these releases
+script = "main.lua"          # optional
+files_dir = "files"          # optional, default "files"
+
+[[option]]                   # shown in the mod manager
+id = "multiplier"
+name = "EXP multiplier"
+type = "int"                 # bool | int | float | choice
+default = 2
+min = 1
+max = 10
+description = "optional help text"
+
+[[patch]]                    # memory patch
+address = 0x80012345
+bytes = "00 00 00 00"        # or u8 / u16 / u32 = value
+when = "always"              # re-applied every frame, or "once"
+if_address = 0x80012340      # optional condition: only while the bytes
+if_bytes = "27 BD FF E8"     # here match (target a specific overlay)
+
+[[lba]]                      # raw sector replacement
+lba = 123456
+file = "data/thing.bin"
+max_sectors = 40             # refuse if the data would overflow this
+```
+
+## Replacing files
+
+### Digimon World (ISO filesystem)
+
+Everything in `files/` replaces the file with the same path on the disc, e.g. `files/ETCNA/TITLE256.TIM` replaces `\ETCNA\TITLE256.TIM`. Files can be smaller or **larger** than the originals: a larger file is placed after the end of the disc. Re:Compiled then updates the ISO directory record, and also patches the game's own file table. Digimon World keeps a `(LBA, size, name)` table inside `SLUS_010.32` and reads files from it directly, so every matching `(LBA, size)` pair in the boot executable is rewritten.
+
+### Digimon World 2 and 2003 (raw LBAs)
+
+These discs contain only the executable and a `DUMMY` file in the filesystem; all game data is read by sector number. Use `[[lba]]` entries to overwrite data in place, with `max_sectors` as a safety check. (Relocating larger data needs the game's LBA table, which can be patched with `[[patch]]` or a script once its address is known.)
+
+The player's image is never modified; replacements live in a virtual disc built when the game starts.
+
+## Lua scripts
+
+Scripts run in an isolated Lua 5.4 state per mod. The `dwrc` table:
+
+| | |
+|---|---|
+| `dwrc.game` | `"dw1"`, `"dw2"` or `"dw3"` |
+| `dwrc.version` | Re:Compiled version |
+| `dwrc.options` | this mod's option values, by id |
+| `dwrc.data` | a table saved per mod (in `mod-data/<game>/<mod>/data.json`) when the game closes or on `dwrc.save()` |
+| `dwrc.buttons` | bit masks: `dwrc.buttons.Cross`, `.Start`, `.Up`, … |
+| `dwrc.log(text)` | write to the log (shown in the F10 mod log) |
+| `dwrc.on_frame(fn(ctx))` | after every video frame |
+| `dwrc.on_input(fn(buttons) -> buttons)` | before every frame; return a modified controller state |
+| `dwrc.on_exec(addr, fn(ctx) -> bool)` | when the CPU reaches `addr`; return `true` if you changed the PC |
+| `dwrc.save()` | write `dwrc.data` now |
+
+The `ctx` passed to callbacks:
+
+| | |
+|---|---|
+| `ctx:read8/16/32(addr)`, `ctx:read_s8/s16/s32(addr)` | read RAM / scratchpad / BIOS |
+| `ctx:write8/16/32(addr, v)` | write RAM / scratchpad |
+| `ctx:read_bytes(addr, n)`, `ctx:write_bytes(addr, str)` | bulk access |
+| `ctx:reg(n or "a0")`, `ctx:set_reg(n, v)` | CPU registers |
+| `ctx:pc()`, `ctx:set_pc(addr)` | program counter |
+| `ctx:ret(value)` | return from the current function (at its first instruction) with `v0 = value` |
+| `ctx:frame()` | frame counter (in `on_frame`) |
+| `ctx:buttons()`, `ctx:pressed("Cross")` | controller state |
+
+Writes that hit translated code automatically invalidate it, so scripts can patch code safely.
+
+### Example: replacing a function
+
+```lua
+-- Make the function at 0x80045678 always return 1 (illustrative address).
+dwrc.on_exec(0x80045678, function(ctx)
+  return ctx:ret(1)
+end)
+```
+
+### Example: Turbo Text (bundled)
+
+```lua
+local hold, tap = dwrc.buttons[dwrc.options.hold], dwrc.buttons.Cross
+local n = 0
+dwrc.on_input(function(b)
+  if (b & hold) ~= 0 then
+    n = n + 1
+    b = b & ~hold
+    if n % 4 < 2 then b = b | tap else b = b & ~tap end
+  else
+    n = 0
+  end
+  return b
+end)
+```
+
+## Finding addresses
+
+The developer CLI (`dwrc-cli`, see [dev-tools.md](dev-tools.md)) can extract files from discs, disassemble the executable, run games headlessly with scripted input and dump VRAM/screenshots. Combined with a script that logs memory from `on_frame`, that is enough to locate game variables. Addresses differ between releases, so use `serials` to restrict mods to the release you studied.
+
+## Tips
+
+* Use `if_address`/`if_bytes` on patches that touch overlay code, so they only apply while that overlay is loaded.
+* Keep mods small and focused. Players can combine them.
+* Never redistribute game data. Ship patches, scripts or tools that *transform* the player's own files instead.

@@ -41,14 +41,10 @@ impl AudioShared {
         self.ring.lock().unwrap().clear();
     }
 
-    pub fn buffered(&self) -> usize {
-        self.ring.lock().unwrap().len()
-    }
 }
 
 pub struct AudioOut {
     _stream: cpal::Stream,
-    pub device_rate: u32,
 }
 
 const TARGET_FILL: f64 = 2048.0;
@@ -124,5 +120,5 @@ pub fn start(shared: Arc<AudioShared>) -> anyhow::Result<AudioOut> {
         other => anyhow::bail!("unsupported audio sample format {other:?}"),
     };
     stream.play()?;
-    Ok(AudioOut { _stream: stream, device_rate: rate })
+    Ok(AudioOut { _stream: stream })
 }

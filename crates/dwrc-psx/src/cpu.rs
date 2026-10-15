@@ -237,13 +237,7 @@ impl Cpu {
         // A GTE command at the interrupted address is executed anyway; the
         // BIOS handler skips it when it returns.
         let phys = mask_region(self.pc);
-        let next = if phys < 0x80_0000 {
-            bus.peek32(self.pc)
-        } else if (0x1FC0_0000..0x1FC8_0000).contains(&phys) {
-            bus.peek32(self.pc)
-        } else {
-            0
-        };
+        let next = if phys < 0x80_0000 || (0x1FC0_0000..0x1FC8_0000).contains(&phys) { bus.peek32(self.pc) } else { 0 };
         let ni = Instr(next);
         if decode(ni) == Op::Cop2Cmd && self.cop0.sr & SR_CU2 != 0 {
             self.gte_stall(bus);

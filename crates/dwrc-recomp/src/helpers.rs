@@ -1,3 +1,4 @@
+#![allow(clippy::not_unsafe_ptr_arg_deref)] // helpers are only called by translated code with a valid context
 //! Runtime interface between translated code and the hardware model.
 //!
 //! Translated blocks receive a pointer to a [`JitCtx`] and call these

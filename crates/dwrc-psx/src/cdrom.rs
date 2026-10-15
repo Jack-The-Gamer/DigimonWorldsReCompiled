@@ -29,7 +29,6 @@ impl DiscRegion {
 
 const STAT_ERROR: u8 = 0x01;
 const STAT_MOTOR: u8 = 0x02;
-const STAT_SEEK_ERROR: u8 = 0x04;
 const STAT_READING: u8 = 0x20;
 const STAT_SEEKING: u8 = 0x40;
 const STAT_PLAYING: u8 = 0x80;
@@ -796,7 +795,7 @@ impl XaDecoder {
                     for j in 0..28 {
                         let t = grp[16 + blk + j * 4] as i8 as i32;
                         let p = &mut self.prev[ch];
-                        let s = ((t << shift) << 0) + ((p[0] * XA_POS[f] + p[1] * XA_NEG[f] + 32) >> 6);
+                        let s = (t << shift) + ((p[0] * XA_POS[f] + p[1] * XA_NEG[f] + 32) >> 6);
                         let s = s.clamp(-0x8000, 0x7FFF);
                         p[1] = p[0];
                         p[0] = s;
