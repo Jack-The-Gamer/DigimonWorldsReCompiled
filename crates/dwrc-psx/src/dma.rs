@@ -172,6 +172,7 @@ impl Dma {
                     (0..7).map(Port::from_index).find(|&p| self.is_active(p))
                 }
                 4 => {
+                    log::trace!("DICR write {v:08x} (was {:08x})", self.dicr());
                     let before = self.master_flag();
                     self.irq_dummy = v & 0x3F;
                     self.force_irq = v & (1 << 15) != 0;
@@ -179,6 +180,10 @@ impl Dma {
                     self.master_irq_enable = v & (1 << 23) != 0;
                     // Writing 1 to a flag acknowledges it.
                     self.irq_flags &= !((v >> 24) & 0x7F);
+                    // Flags of channels whose interrupt is (now) disabled are
+                    // cleared too (Mednafen, hardware-verified). Games rely on
+                    // this to discard completions left over by the BIOS.
+                    self.irq_flags &= self.irq_enable;
                     if !before && self.master_flag() {
                         irq.raise(Interrupt::Dma);
                     }
@@ -206,5 +211,6 @@ impl Dma {
         if !before && self.master_flag() {
             irq.raise(Interrupt::Dma);
         }
+        log::trace!("DMA {:?} done, DICR now {:08x} (irq edge {})", p, self.dicr(), !before && self.master_flag());
     }
 }

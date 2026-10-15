@@ -170,6 +170,15 @@ impl Cdrom {
         self.mode = 0x80;
     }
 
+    pub fn debug_state(&self) -> String {
+        format!(
+            "index {} en {:02x} flags {:02x} stat {:02x} mode {:02x} filter {}/{} pos {} drive {:?} queue {} params {} response {} fifo {}/{} sector_valid {} request {:02x} vol {:?}",
+            self.index, self.irq_enable, self.irq_flags, self.stat, self.mode, self.filter_file, self.filter_channel, self.pos,
+            self.drive, self.queue.len(), self.params.len(), self.response.len(), self.data_pos, self.data_fifo.len(),
+            self.sector_valid, self.request, self.vol
+        )
+    }
+
     pub fn has_disc(&self) -> bool {
         self.disc.is_some()
     }

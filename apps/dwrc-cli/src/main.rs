@@ -112,8 +112,30 @@ fn run(args: &[String]) -> Result<()> {
     }
     psx.bus.tty_echo = tty;
     psx.insert_disc(Box::new(disc) as Box<dyn SectorSource>, region);
+    let entry = exe.pc;
     if fast {
         psx.enable_fast_boot(exe);
+    }
+    if flag(args, "--dump-entry") {
+        psx.bus.add_hook(
+            entry,
+            Box::new(move |cpu, bus| {
+                bus.remove_hook(entry);
+                println!("=== state at game entry {entry:08x}");
+                println!("cop0 {:?}", cpu.cop0);
+                println!("regs {:08x?}", &cpu.regs);
+                println!("irq stat {:03x} mask {:03x}", bus.irq.stat, bus.irq.mask);
+                println!("dma dpcr {:08x} dicr {:08x}", bus.dma.read(0xF0), bus.dma.read(0xF4));
+                for c in 0..7u32 {
+                    println!("dma{c} madr {:08x} bcr {:08x} chcr {:08x}", bus.dma.read(0x80 + c * 16), bus.dma.read(0x84 + c * 16), bus.dma.read(0x88 + c * 16));
+                }
+                println!("gpustat {:08x}", bus.gpu.status());
+                println!("memctrl {:08x?} ramsize {:08x} cache {:08x}", bus.memctrl, bus.ram_size_reg, bus.cache_ctrl);
+                println!("spu ctrl {:04x}", bus.spu.ctrl);
+                println!("cdrom {}", bus.cdrom.debug_state());
+                dwrc_psx::HookAction::Continue
+            }),
+        );
     }
     if let Some(d) = &shots {
         std::fs::create_dir_all(d)?;
@@ -143,6 +165,20 @@ fn run(args: &[String]) -> Result<()> {
             }
         }
         audio.clear();
+    }
+    if flag(args, "--pcs") {
+        // Sample where the CPU spends time over a few frames.
+        let mut hist: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        for _ in 0..200000 {
+            psx.run_cycles(57);
+            *hist.entry(psx.cpu.pc).or_default() += 1;
+        }
+        let mut v: Vec<_> = hist.into_iter().collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1));
+        for (pc, n) in v.iter().take(12) {
+            println!("pc {pc:08x} x{n}");
+        }
+        println!("dicr {:08x} irq {:03x}/{:03x} sr {:08x}", psx.bus.dma.read(0xF4), psx.bus.irq.stat, psx.bus.irq.mask, psx.cpu.cop0.sr);
     }
     let el = t0.elapsed().as_secs_f64();
     println!(

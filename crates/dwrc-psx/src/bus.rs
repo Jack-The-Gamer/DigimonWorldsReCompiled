@@ -861,10 +861,14 @@ impl Bus {
         }
         // Devices that are not ready keep the channel pending.
         match port {
-            Port::MdecOut if !self.mdec.output_ready() => return,
+            Port::MdecOut if !self.mdec.output_ready() => {
+                log::trace!("dma MdecOut pending (no output yet)");
+                return;
+            }
             _ => {}
         }
         let ch = self.dma.channel(port);
+        log::trace!("dma {:?} mode {} madr {:06x} bcr {:08x} chcr {:08x}", port, ch.sync_mode(), ch.base, ch.block_control, ch.control);
         let words = match ch.sync_mode() {
             2 => self.dma_linked_list(port),
             _ => self.dma_block(port),
