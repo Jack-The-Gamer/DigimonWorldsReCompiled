@@ -21,6 +21,18 @@ fn main() -> Result<()> {
         }
         Some("run") => run(&args[1..]),
         Some("disasm") => disasm(&args[1..]),
+        Some("import") => {
+            // import <data-root> <folder>
+            let paths = dwrc_runtime::Paths::at(args.get(1).context("data root")?);
+            paths.ensure()?;
+            let mut lib = dwrc_runtime::Library::load(&paths);
+            let rep = lib.scan_folder(std::path::Path::new(args.get(2).context("folder")?), &mut |n, f| {
+                if f >= 1.0 { println!("verified {n}") }
+            });
+            lib.save(&paths)?;
+            println!("{rep:#?}");
+            Ok(())
+        }
         _ => bail!(
             "commands:\n  inspect <cue>\n  extract <cue> <path> <out>\n  run <cue> --bios <bin> [--frames N] [--shots dir] [--every K] [--fast] [--input frame:button:len,...]\n  disasm <exe> <addr> <count>"
         ),

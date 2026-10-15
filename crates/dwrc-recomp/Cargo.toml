@@ -1,7 +1,11 @@
 [package]
 name = "dwrc-recomp"
+description = "Static recompiler: MIPS analysis and Cranelift native code generation"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+dwrc-psx.workspace = true
+dwrc-mips.workspace = true
+log.workspace = true

@@ -13,6 +13,7 @@ path = "src/main.rs"
 dwrc-disc.workspace = true
 dwrc-mips.workspace = true
 dwrc-psx.workspace = true
+dwrc-runtime.workspace = true
 anyhow.workspace = true
 env_logger.workspace = true
 log.workspace = true

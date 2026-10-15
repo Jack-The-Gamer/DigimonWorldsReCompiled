@@ -1,7 +1,18 @@
 [package]
 name = "dwrc-mods"
+description = "Mod platform: manifests, disc file overrides, memory patches and Lua scripting with hooks"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+dwrc-disc.workspace = true
+dwrc-psx.workspace = true
+anyhow.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+hex.workspace = true
+mlua = { version = "0.10", features = ["lua54", "vendored", "send", "serialize"] }
+dwrc-mips.workspace = true

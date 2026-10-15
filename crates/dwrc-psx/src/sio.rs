@@ -171,6 +171,7 @@ impl Sio {
             if now >= at {
                 self.transfer = None;
                 let (rx, ack) = self.exchange(tx);
+                log::trace!("sio port{} tx {tx:02x} rx {rx:02x} ack {ack} ctrl {:04x}", self.port(), self.ctrl);
                 self.rx = rx;
                 self.rx_full = true;
                 if ack {
