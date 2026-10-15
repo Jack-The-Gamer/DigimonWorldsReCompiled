@@ -1,0 +1,13 @@
+[package]
+name = "dwrc-disc"
+description = "CD image access (BIN/CUE), ISO9660 and PS-X EXE parsing, and game identification"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+log.workspace = true
+sha1.workspace = true
+hex.workspace = true
+serde.workspace = true

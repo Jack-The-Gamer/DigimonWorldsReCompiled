@@ -1,0 +1,60 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/dwrc-disc",
+    "crates/dwrc-mips",
+    "crates/dwrc-psx",
+    "crates/dwrc-recomp",
+    "crates/dwrc-mods",
+    "crates/dwrc-runtime",
+    "apps/dwrc",
+    "apps/dwrc-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["Digimon Worlds Re:Compiled contributors"]
+repository = "https://github.com/your-name/DigimonWorldsReCompiled"
+rust-version = "1.80"
+
+[workspace.dependencies]
+dwrc-disc = { path = "crates/dwrc-disc" }
+dwrc-mips = { path = "crates/dwrc-mips" }
+dwrc-psx = { path = "crates/dwrc-psx" }
+dwrc-recomp = { path = "crates/dwrc-recomp" }
+dwrc-mods = { path = "crates/dwrc-mods" }
+dwrc-runtime = { path = "crates/dwrc-runtime" }
+
+anyhow = "1"
+thiserror = "2"
+log = "0.4"
+env_logger = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+sha1 = "0.10"
+hex = "0.4"
+png = "0.17"
+directories = "5"
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+
+# The emulation core is hot; keep it optimised even in debug builds so
+# `cargo run` is playable while developing.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev.package.dwrc-psx]
+opt-level = 3
+
+[profile.dev.package.dwrc-recomp]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+debug = 1
+panic = "unwind"

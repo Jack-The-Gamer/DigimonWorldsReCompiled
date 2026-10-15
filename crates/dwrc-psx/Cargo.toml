@@ -1,0 +1,12 @@
+[package]
+name = "dwrc-psx"
+description = "Accurate PlayStation hardware core: CPU reference interpreter, GTE, GPU, SPU, CD-ROM, MDEC, DMA, timers, controllers, memory cards"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+dwrc-disc.workspace = true
+dwrc-mips.workspace = true
+log.workspace = true
+serde.workspace = true

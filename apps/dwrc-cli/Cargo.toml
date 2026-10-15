@@ -1,0 +1,19 @@
+[package]
+name = "dwrc-cli"
+description = "Developer tool: inspect discs, disassemble, run games headlessly"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "dwrc-cli"
+path = "src/main.rs"
+
+[dependencies]
+dwrc-disc.workspace = true
+dwrc-mips.workspace = true
+dwrc-psx.workspace = true
+anyhow.workspace = true
+env_logger.workspace = true
+log.workspace = true
+png.workspace = true
