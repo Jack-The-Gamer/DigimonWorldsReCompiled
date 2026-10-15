@@ -9,6 +9,8 @@
 //! dwrc.log(msg)
 //! dwrc.on_frame(function(ctx) ... end)
 //! dwrc.on_exec(0x80012345, function(ctx) ... return false end)
+//! dwrc.on_input(function(buttons) return buttons end) -- before each frame
+//! dwrc.buttons.Cross    -- bit masks for each controller button
 //! dwrc.save()            -- persist dwrc.data now
 //! ```
 //!
@@ -29,6 +31,7 @@ const REG_NAMES: [&str; 32] = dwrc_mips::REG_NAMES;
 
 #[derive(Default)]
 struct HostState {
+    input_cbs: Vec<RegistryKey>,
     frame_cbs: Vec<RegistryKey>,
     exec_hooks: Vec<(u32, Arc<RegistryKey>)>,
 }
@@ -140,12 +143,14 @@ fn toml_to_json(v: &toml::Value) -> serde_json::Value {
 }
 
 impl ScriptHost {
-    pub fn load(id: &str, path: &std::path::Path, options: crate::OptionValues, data_dir: PathBuf) -> Result<Self> {
+    pub fn load(id: &str, game: dwrc_disc::GameId, path: &std::path::Path, options: crate::OptionValues, data_dir: PathBuf) -> Result<Self> {
         let lua = Lua::new();
         let state = Arc::new(Mutex::new(HostState::default()));
         {
             let api = lua.create_table().map_err(|e| anyhow!("{e}"))?;
             let le = |e: mlua::Error| anyhow!("{e}");
+            api.set("game", game.slug()).map_err(le)?;
+            api.set("version", env!("CARGO_PKG_VERSION")).map_err(le)?;
             let mid = id.to_string();
             api.set(
                 "log",
@@ -167,6 +172,22 @@ impl ScriptHost {
                 .map_err(le)?,
             )
             .map_err(le)?;
+            let st = state.clone();
+            api.set(
+                "on_input",
+                lua.create_function(move |lua, f: Function| {
+                    let key = lua.create_registry_value(f)?;
+                    st.lock().unwrap().input_cbs.push(key);
+                    Ok(())
+                })
+                .map_err(le)?,
+            )
+            .map_err(le)?;
+            let buttons = lua.create_table().map_err(le)?;
+            for b in Button::ALL {
+                buttons.set(format!("{b:?}"), 1u32 << (b as u32)).map_err(le)?;
+            }
+            api.set("buttons", buttons).map_err(le)?;
             let st = state.clone();
             api.set(
                 "on_exec",
@@ -270,6 +291,19 @@ impl ScriptHost {
             Ok(())
         })
         .map_err(|e| anyhow!("{e}"))
+    }
+
+    pub fn filter_input(&mut self, buttons: u16) -> Result<u16> {
+        let st = self.state.lock().unwrap();
+        let mut b = buttons;
+        for key in &st.input_cbs {
+            let f: Function = self.lua.registry_value(key).map_err(|e| anyhow!("{e}"))?;
+            let r: Option<u32> = f.call(b).map_err(|e| anyhow!("{e}"))?;
+            if let Some(v) = r {
+                b = v as u16;
+            }
+        }
+        Ok(b)
     }
 
     pub fn save_data(&mut self) {

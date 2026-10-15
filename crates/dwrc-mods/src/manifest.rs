@@ -27,9 +27,9 @@ pub struct ModSection {
     pub author: String,
     #[serde(default)]
     pub description: String,
-    /// `dw1`, `dw2` or `dw3`.
+    /// `dw1`, `dw2`, `dw3`, or `any` for mods that work with every game.
     #[serde(with = "game_slug")]
-    pub game: GameId,
+    pub game: GameSel,
     /// Restrict to specific releases (boot serials such as `SLUS-01032`).
     #[serde(default)]
     pub serials: Vec<String>,
@@ -49,15 +49,40 @@ fn default_files_dir() -> String {
     "files".into()
 }
 
+/// Which game(s) a mod targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameSel {
+    Any,
+    Game(GameId),
+}
+
+impl GameSel {
+    pub fn matches(self, g: GameId) -> bool {
+        match self {
+            GameSel::Any => true,
+            GameSel::Game(x) => x == g,
+        }
+    }
+}
+
 mod game_slug {
+    use super::GameSel;
     use dwrc_disc::GameId;
     use serde::{Deserialize, Deserializer, Serializer};
-    pub fn serialize<S: Serializer>(g: &GameId, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(g.slug())
+    pub fn serialize<S: Serializer>(g: &GameSel, s: S) -> Result<S::Ok, S::Error> {
+        match g {
+            GameSel::Any => s.serialize_str("any"),
+            GameSel::Game(g) => s.serialize_str(g.slug()),
+        }
     }
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<GameId, D::Error> {
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<GameSel, D::Error> {
         let s = String::deserialize(d)?;
-        GameId::from_slug(&s).ok_or_else(|| serde::de::Error::custom(format!("unknown game '{s}' (use dw1, dw2 or dw3)")))
+        if s.eq_ignore_ascii_case("any") {
+            return Ok(GameSel::Any);
+        }
+        GameId::from_slug(&s)
+            .map(GameSel::Game)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown game '{s}' (use dw1, dw2, dw3 or any)")))
     }
 }
 

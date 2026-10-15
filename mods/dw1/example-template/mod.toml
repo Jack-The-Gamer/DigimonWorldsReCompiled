@@ -1,0 +1,36 @@
+# A documented starting point for Digimon World mods.
+# Copy this folder into your mods folder (Settings > Data shows where),
+# rename it, change the id, and start editing.
+
+[mod]
+id = "example-template"
+name = "Example Template (does nothing)"
+version = "0.1.0"
+author = "you"
+description = "A commented template showing every kind of change a mod can make. Enabling it changes nothing."
+game = "dw1"                 # dw1 | dw2 | dw3 | any
+serials = ["SLUS-01032"]     # optional: only load for these releases
+script = "main.lua"          # optional Lua script
+files_dir = "files"          # files/<ISO path> replaces that file on the disc
+
+# Options appear in the mod manager and are available to scripts as
+# dwrc.options.<id>.
+[[option]]
+id = "verbose"
+name = "Log extra information"
+type = "bool"
+default = false
+
+# Memory patches (uncomment to use). Addresses are KSEG0 (0x80xxxxxx).
+# [[patch]]
+# address = 0x80012345
+# bytes = "00 00 00 00"      # or u8 = .., u16 = .., u32 = ..
+# when = "always"            # "always" (re-applied every frame) or "once"
+# if_address = 0x80012340    # only while the bytes here match
+# if_bytes = "27 BD FF E8"   #   (use this to target an overlay)
+
+# Raw sector replacement for data the game reads by LBA (DW2 / DW2003):
+# [[lba]]
+# lba = 123456
+# file = "data/replacement.bin"
+# max_sectors = 40

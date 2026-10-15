@@ -65,19 +65,20 @@ impl Session {
         let bios = std::fs::read(&bios_entry.path).with_context(|| format!("reading {}", bios_entry.path.display()))?;
 
         let mut disc = Disc::open(&entry.disc_path)?;
-        let fs = IsoFs::mount(&mut disc)?;
-        let exe_entry = fs.find(&mut disc, &ident.boot_file)?.ok_or_else(|| anyhow!("boot executable missing"))?;
-        let exe = PsxExe::parse(&fs.read(&mut disc, &exe_entry)?)?;
 
         // Mods: disc overrides first (they edit the virtual disc).
         let enabled_mods: Vec<String> = mods.iter().map(|m| m.info.id().to_string()).collect();
         let mut mod_rt = {
             let mut ctx = dwrc_mods::disc::DiscContext::new(&mut disc);
-            ModRuntime::build(&mods, &mut ctx)
+            ModRuntime::build(game, &mods, &mut ctx)
         };
         for l in &mod_rt.log {
             log::info!("{l}");
         }
+        // Read the boot executable from the (possibly modded) disc.
+        let fs = IsoFs::mount(&mut disc)?;
+        let exe_entry = fs.find(&mut disc, &ident.boot_file)?.ok_or_else(|| anyhow!("boot executable missing"))?;
+        let exe = PsxExe::parse(&fs.read(&mut disc, &exe_entry)?)?;
 
         let (standard, region) = match ident.region {
             Region::Pal => (VideoStandard::Pal, DiscRegion::Pal),
@@ -121,7 +122,10 @@ impl Session {
         })
     }
 
-    pub fn set_pad(&mut self, port: usize, state: PadState) {
+    pub fn set_pad(&mut self, port: usize, mut state: PadState) {
+        if port == 0 {
+            state.buttons = self.mods.filter_input(state.buttons);
+        }
         self.psx.bus.sio.pads[port].state = state;
         self.psx.bus.sio.pads[port].connected = port == 0 || state.buttons != 0 || self.psx.bus.sio.pads[port].connected;
     }

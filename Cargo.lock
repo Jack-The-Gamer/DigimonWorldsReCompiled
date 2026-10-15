@@ -1137,6 +1137,7 @@ dependencies = [
  "anyhow",
  "dwrc-disc",
  "dwrc-mips",
+ "dwrc-mods",
  "dwrc-psx",
  "dwrc-recomp",
  "dwrc-runtime",

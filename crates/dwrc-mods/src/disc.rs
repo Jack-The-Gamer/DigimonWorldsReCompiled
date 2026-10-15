@@ -13,15 +13,67 @@ use dwrc_disc::msf::{bin_to_bcd, Msf, PREGAP_SECTORS};
 use dwrc_disc::{Disc, SectorSource, RAW_SECTOR_SIZE};
 use std::path::Path;
 
+/// A file whose location or size changed.
+#[derive(Debug, Clone, Copy)]
+pub struct Relocation {
+    pub old_lba: u32,
+    pub old_size: u32,
+    pub new_lba: u32,
+    pub new_size: u32,
+}
+
 pub struct DiscContext<'a> {
     pub disc: &'a mut Disc,
     fs: Option<IsoFs>,
+    relocations: Vec<Relocation>,
 }
 
 impl<'a> DiscContext<'a> {
     pub fn new(disc: &'a mut Disc) -> Self {
         let fs = IsoFs::mount(disc).ok();
-        Self { disc, fs }
+        Self { disc, fs, relocations: Vec::new() }
+    }
+
+    /// Patches file tables inside the boot executable: many games (Digimon
+    /// World among them) keep their own `(LBA, size)` table instead of
+    /// reading the ISO directory. Every adjacent `(old LBA, old size)` pair
+    /// is rewritten. Returns the number of entries patched.
+    pub fn finish(&mut self) -> Result<usize> {
+        if self.relocations.is_empty() {
+            return Ok(0);
+        }
+        let fs = match &self.fs {
+            Some(f) => f,
+            None => return Ok(0),
+        };
+        let Some(cnf) = fs.find(self.disc, "SYSTEM.CNF").map_err(|e| anyhow!("{e}"))? else { return Ok(0) };
+        let text = String::from_utf8_lossy(&fs.read(self.disc, &cnf).map_err(|e| anyhow!("{e}"))?).to_string();
+        let boot = dwrc_disc::iso9660::parse_system_cnf(&text)
+            .into_iter()
+            .find(|(k, _)| k == "BOOT")
+            .map(|(_, v)| dwrc_disc::iso9660::boot_path(&v));
+        let Some(boot) = boot else { return Ok(0) };
+        let Some(exe) = fs.find(self.disc, &boot).map_err(|e| anyhow!("{e}"))? else { return Ok(0) };
+        let mut data = fs.read(self.disc, &exe).map_err(|e| anyhow!("{e}"))?;
+        let mut patched = 0;
+        for r in &self.relocations {
+            let mut i = 0x800; // skip the PS-X EXE header
+            while i + 8 <= data.len() {
+                let a = u32::from_le_bytes(data[i..i + 4].try_into().unwrap());
+                let b = u32::from_le_bytes(data[i + 4..i + 8].try_into().unwrap());
+                if a == r.old_lba && b == r.old_size {
+                    data[i..i + 4].copy_from_slice(&r.new_lba.to_le_bytes());
+                    data[i + 4..i + 8].copy_from_slice(&r.new_size.to_le_bytes());
+                    patched += 1;
+                }
+                i += 4;
+            }
+        }
+        if patched > 0 {
+            self.write_data(exe.lba, &data, true)?;
+            log::info!("mod: patched {patched} file-table entr(y/ies) in {boot}");
+        }
+        Ok(patched)
     }
 
     /// Applies a mod's file and LBA replacements. Returns how many were applied.
@@ -32,6 +84,10 @@ impl<'a> DiscContext<'a> {
             let mut list = Vec::new();
             collect(&files_dir, &files_dir, &mut list);
             for (rel, path) in list {
+                let name = rel.rsplit('/').next().unwrap_or(&rel).to_ascii_lowercase();
+                if name.starts_with("readme") {
+                    continue;
+                }
                 let data = std::fs::read(&path)?;
                 self.replace_file(&rel, &data).with_context(|| format!("replacing {rel}"))?;
                 n += 1;
@@ -118,6 +174,9 @@ impl<'a> DiscContext<'a> {
         raw[base + 10..base + 14].copy_from_slice(&size.to_le_bytes());
         raw[base + 14..base + 18].copy_from_slice(&size.to_be_bytes());
         self.disc.overlay_sector(rec_index, raw);
+        if lba != entry.lba || size != entry.size {
+            self.relocations.push(Relocation { old_lba: entry.lba, old_size: entry.size, new_lba: lba, new_size: size });
+        }
         log::info!("mod: replaced {iso_path} ({} bytes at LBA {lba})", data.len());
         Ok(())
     }

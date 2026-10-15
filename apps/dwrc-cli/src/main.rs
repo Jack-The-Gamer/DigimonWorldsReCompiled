@@ -63,6 +63,7 @@ fn parse_button(s: &str) -> Option<Button> {
         "r1" => Button::R1,
         "l2" => Button::L2,
         "r2" => Button::R2,
+        "none" => Button::L3,
         _ => return None,
     })
 }
@@ -100,6 +101,28 @@ fn run(args: &[String]) -> Result<()> {
         dwrc_disc::ident::Region::NtscJ => (VideoStandard::Ntsc, DiscRegion::NtscJ),
         dwrc_disc::ident::Region::NtscU => (VideoStandard::Ntsc, DiscRegion::NtscU),
     };
+    // Mods given with --mod <folder> (repeatable), default options.
+    let mut enabled = Vec::new();
+    for (i, a) in args.iter().enumerate() {
+        if a == "--mod" {
+            let dir = PathBuf::from(args.get(i + 1).context("--mod needs a folder")?);
+            let manifest = dwrc_mods::ModManifest::load(&dir.join("mod.toml"))?;
+            let problems = manifest.validate(&dir);
+            let info = dwrc_mods::ModInfo { root: dir.clone(), manifest, problems };
+            if !info.problems.is_empty() {
+                bail!("mod {} has problems: {:?}", dir.display(), info.problems);
+            }
+            let options = dwrc_mods::resolve_options(&info, None);
+            enabled.push(dwrc_mods::EnabledMod { info, options, data_dir: std::env::temp_dir().join("dwrc-cli-mod-data") });
+        }
+    }
+    let mut mod_rt = {
+        let mut ctx = dwrc_mods::disc::DiscContext::new(&mut disc);
+        dwrc_mods::ModRuntime::build(ident.game, &enabled, &mut ctx)
+    };
+    for l in &mod_rt.log {
+        println!("mod: {l}");
+    }
     let fs = IsoFs::mount(&mut disc)?;
     let exe_entry = fs.find(&mut disc, &ident.boot_file)?.context("boot exe missing")?;
     let exe = PsxExe::parse(&fs.read(&mut disc, &exe_entry)?)?;
@@ -137,6 +160,7 @@ fn run(args: &[String]) -> Result<()> {
             }),
         );
     }
+    mod_rt.install(&mut psx);
     if let Some(d) = &shots {
         std::fs::create_dir_all(d)?;
     }
@@ -151,8 +175,10 @@ fn run(args: &[String]) -> Result<()> {
                 state.set(*b, true);
             }
         }
+        state.buttons = mod_rt.filter_input(state.buttons);
         psx.bus.sio.pads[0].state = state;
         psx.run_frame();
+        mod_rt.on_frame(&mut psx, f);
         psx.bus.spu.take_output(&mut audio);
         audio_total += audio.len();
         if wav.is_some() {

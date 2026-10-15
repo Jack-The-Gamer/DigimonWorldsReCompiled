@@ -19,7 +19,7 @@ pub mod manifest;
 pub mod patches;
 pub mod script;
 
-pub use manifest::{ModManifest, OptionDef, OptionKind};
+pub use manifest::{GameSel, ModManifest, OptionDef, OptionKind};
 
 use dwrc_disc::GameId;
 use std::collections::BTreeMap;
@@ -58,14 +58,14 @@ pub struct EnabledMod {
 pub fn discover(roots: &[PathBuf], game: GameId) -> Vec<ModInfo> {
     let mut out: Vec<ModInfo> = Vec::new();
     for root in roots {
-        for dir in [root.join(game.slug()), root.clone()] {
+        for dir in [root.join(game.slug()), root.join("any"), root.clone()] {
             let Ok(rd) = std::fs::read_dir(&dir) else { continue };
             let mut entries: Vec<_> = rd.flatten().map(|e| e.path()).filter(|p| p.join("mod.toml").is_file()).collect();
             entries.sort();
             for p in entries {
                 match ModManifest::load(&p.join("mod.toml")) {
                     Ok(m) => {
-                        if m.info.game != game {
+                        if !m.info.game.matches(game) {
                             continue;
                         }
                         if out.iter().any(|o| o.manifest.info.id == m.info.id) {
@@ -104,14 +104,14 @@ pub struct ModRuntime {
 impl ModRuntime {
     /// Applies disc overrides and loads patches/scripts for `mods` (in
     /// load order: later mods win on conflicts).
-    pub fn build(mods: &[EnabledMod], disc_ctx: &mut disc::DiscContext) -> Self {
+    pub fn build(game: GameId, mods: &[EnabledMod], disc_ctx: &mut disc::DiscContext) -> Self {
         let mut rt = ModRuntime { patches: Vec::new(), scripts: Vec::new(), log: Vec::new() };
-        for m in mods {
+        for m in mods.iter() {
             let id = m.info.id().to_string();
             match disc_ctx.apply_mod(&m.info) {
                 Ok(n) if n > 0 => rt.log.push(format!("[{id}] replaced {n} disc file(s)/range(s)")),
                 Ok(_) => {}
-                Err(e) => rt.log.push(format!("[{id}] disc overrides failed: {e}")),
+                Err(e) => rt.log.push(format!("[{id}] disc overrides failed: {e:#}")),
             }
             for p in &m.info.manifest.patches {
                 match patches::MemoryPatch::from_def(p) {
@@ -121,7 +121,7 @@ impl ModRuntime {
             }
             if let Some(s) = &m.info.manifest.info.script {
                 let path = m.info.root.join(s);
-                match script::ScriptHost::load(&id, &path, m.options.clone(), m.data_dir.clone()) {
+                match script::ScriptHost::load(&id, game, &path, m.options.clone(), m.data_dir.clone()) {
                     Ok(h) => {
                         rt.log.push(format!("[{id}] script loaded"));
                         rt.scripts.push(h);
@@ -129,6 +129,11 @@ impl ModRuntime {
                     Err(e) => rt.log.push(format!("[{id}] script error: {e}")),
                 }
             }
+        }
+        match disc_ctx.finish() {
+            Ok(n) if n > 0 => rt.log.push(format!("patched {n} file-table entr(y/ies) in the game executable")),
+            Ok(_) => {}
+            Err(e) => rt.log.push(format!("file-table patching failed: {e:#}")),
         }
         rt
     }
@@ -154,6 +159,18 @@ impl ModRuntime {
                 }
             }
         }
+    }
+
+    /// Lets scripts transform the controller state before each frame.
+    pub fn filter_input(&mut self, buttons: u16) -> u16 {
+        let mut b = buttons;
+        for s in &mut self.scripts {
+            match s.filter_input(b) {
+                Ok(v) => b = v,
+                Err(e) => log::warn!("[{}] on_input: {e}", s.mod_id()),
+            }
+        }
+        b
     }
 
     pub fn save_all(&mut self) {
