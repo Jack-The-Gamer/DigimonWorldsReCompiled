@@ -109,28 +109,50 @@ impl Hub {
     /// Reads the installable releases of mod `id` in GitHub repository
     /// `repo` (cached for six hours unless `force`).
     pub fn fetch_releases(&self, repo: &str, id: &str, force: bool) -> ReleasesFetch {
-        let key = format!("{repo}#{id}");
-        let cached = self.cache.get::<Vec<Release>>("releases", &key);
-        if let Some(c) = &cached {
-            if !force && c.age() < RELEASES_TTL {
-                return ReleasesFetch { releases: c.data.clone(), error: None, from_cache: true, checked_at: c.checked_at };
-            }
+        let mut v = self.fetch_releases_many(repo, &[id.to_string()], force);
+        v.pop().map(|(_, f)| f).expect("one result per id")
+    }
+
+    /// The installable releases of several mods published from one
+    /// repository (a mod index hosting many, say), with a single request to
+    /// GitHub. Each mod's list is cached for six hours; the cache answers
+    /// unless `force` or one of them is stale, and stands in when GitHub
+    /// can't be reached.
+    pub fn fetch_releases_many(&self, repo: &str, ids: &[String], force: bool) -> Vec<(String, ReleasesFetch)> {
+        let key = |id: &str| format!("{repo}#{id}");
+        let cached: Vec<_> = ids.iter().map(|id| self.cache.get::<Vec<Release>>("releases", &key(id))).collect();
+        if !force && cached.iter().all(|c| c.as_ref().is_some_and(|c| c.age() < RELEASES_TTL)) {
+            return ids
+                .iter()
+                .zip(cached)
+                .filter_map(|(id, c)| c.map(|c| (id.clone(), ReleasesFetch { releases: c.data, error: None, from_cache: true, checked_at: c.checked_at })))
+                .collect();
         }
-        let live = self.http.github(&github::releases_path(repo)).and_then(|j| github::parse_releases(&j, id));
-        match live {
-            Ok(r) => {
-                self.cache.put("releases", &key, &r);
-                ReleasesFetch { releases: r, error: None, from_cache: false, checked_at: cache::now() }
-            }
-            Err(e) => {
-                let msg = format!("{e:#}");
-                let msg = if msg.starts_with("not found") { format!("{repo} was not found on GitHub") } else { msg };
-                match cached {
-                    Some(c) => ReleasesFetch { releases: c.data, error: Some(msg), from_cache: true, checked_at: c.checked_at },
-                    None => ReleasesFetch { releases: Vec::new(), error: Some(msg), from_cache: false, checked_at: 0 },
-                }
-            }
-        }
+        let live = self.http.github(&github::releases_path(repo));
+        ids.iter()
+            .zip(cached)
+            .map(|(id, cached)| {
+                let parsed = match &live {
+                    Ok(j) => github::parse_releases(j, id),
+                    Err(e) => Err(anyhow::anyhow!("{e:#}")),
+                };
+                let f = match parsed {
+                    Ok(r) => {
+                        self.cache.put("releases", &key(id), &r);
+                        ReleasesFetch { releases: r, error: None, from_cache: false, checked_at: cache::now() }
+                    }
+                    Err(e) => {
+                        let msg = format!("{e:#}");
+                        let msg = if msg.starts_with("not found") { format!("{repo} was not found on GitHub") } else { msg };
+                        match cached {
+                            Some(c) => ReleasesFetch { releases: c.data, error: Some(msg), from_cache: true, checked_at: c.checked_at },
+                            None => ReleasesFetch { releases: Vec::new(), error: Some(msg), from_cache: false, checked_at: 0 },
+                        }
+                    }
+                };
+                (id.clone(), f)
+            })
+            .collect()
     }
 
     /// A text file (an index entry's description), cached alongside feeds.

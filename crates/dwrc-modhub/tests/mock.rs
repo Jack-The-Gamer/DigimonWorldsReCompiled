@@ -152,6 +152,40 @@ fn releases_update_and_install() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn releases_of_many_mods_in_one_request() {
+    let (base, routes, log) = serve();
+    let dir = tmp("many");
+    let mut hub = Hub::new(dir.join("cache"));
+    hub.http.github_api = base.clone();
+    // A mod index hosting two mods: tags <id>-v<version>.
+    let releases = format!(
+        r#"[{{"tag_name":"speedy-v1.0.0","assets":[{{"name":"speedy-1.0.0.zip","browser_download_url":"{base}/dl/speedy-1.0.0.zip"}}]}},
+            {{"tag_name":"turbo-v1.1.0","assets":[{{"name":"turbo-1.1.0.zip","browser_download_url":"{base}/dl/turbo-1.1.0.zip"}}]}},
+            {{"tag_name":"turbo-v1.0.0","assets":[{{"name":"turbo-1.0.0.zip","browser_download_url":"{base}/dl/turbo-1.0.0.zip"}}]}}]"#
+    );
+    set(&routes, "/repos/me/index/releases?per_page=100", 200, releases.as_bytes());
+    let ids = vec!["turbo".to_string(), "speedy".to_string(), "gone".to_string()];
+    let calls = |log: &Arc<Mutex<Vec<String>>>| log.lock().unwrap().iter().filter(|l| l.starts_with("/repos/me/index/")).count();
+    let got = hub.fetch_releases_many("me/index", &ids, false);
+    assert_eq!(calls(&log), 1);
+    let vers = |i: usize| got[i].1.releases.iter().map(|r| r.version.clone()).collect::<Vec<_>>();
+    assert_eq!((got[0].0.as_str(), vers(0)), ("turbo", vec!["1.1.0".to_string(), "1.0.0".to_string()]));
+    assert_eq!((got[1].0.as_str(), vers(1)), ("speedy", vec!["1.0.0".to_string()]));
+    assert!(got[2].1.releases.is_empty() && got[2].1.error.is_none());
+    // Fresh in the cache: no request; forced: one request again.
+    let again = hub.fetch_releases_many("me/index", &ids, false);
+    assert!(again.iter().all(|(_, f)| f.from_cache) && calls(&log) == 1);
+    hub.fetch_releases_many("me/index", &ids, true);
+    assert_eq!(calls(&log), 2);
+    // GitHub unreachable: every mod falls back to its cached list.
+    set(&routes, "/repos/me/index/releases?per_page=100", 500, b"{}");
+    let down = hub.fetch_releases_many("me/index", &ids, true);
+    assert!(down.iter().all(|(_, f)| f.error.is_some() && f.from_cache));
+    assert_eq!(down[0].1.releases.len(), 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Real TLS through the environment's proxy, when the network allows it.
 #[test]
 #[ignore]

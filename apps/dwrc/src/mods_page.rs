@@ -19,10 +19,14 @@ use dwrc_mods::package::{self, AlreadyInstalled, InstallOptions, Installed};
 use dwrc_mods::{ModInfo, ModSource, OptionKind, Skip};
 use dwrc_runtime::{Config, Library, Paths};
 use eframe::egui::{self, Color32, RichText, Stroke, TextureHandle, TextureOptions, Vec2};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+/// An installed mod's card under the pointer (the card opens on a click).
+const CARD_HOVER: Color32 = Color32::from_rgb(35, 39, 48);
 
 pub fn game_short(g: GameId) -> &'static str {
     match g {
@@ -63,6 +67,8 @@ enum Remote<T> {
 enum Msg {
     Index(String, IndexFetch),
     Releases(String, ReleasesFetch),
+    /// The releases of several mods published from one repository.
+    ReleaseBatch(Vec<(String, ReleasesFetch)>),
     Text(String, Result<String, String>),
     Image(String, Result<(u32, u32, Vec<u8>), String>),
     Installed(Vec<Result<Installed, String>>),
@@ -125,6 +131,9 @@ pub struct ModsUi {
     expanded: Option<String>,
     releases: HashMap<String, Remote<ReleasesFetch>>,
     checked_updates: bool,
+    /// When the indexes and mod updates were last asked for live: at
+    /// start-up, then every few hours while the launcher stays open.
+    last_live: Option<Instant>,
     sources: Vec<IndexSource>,
     indexes: HashMap<String, Remote<IndexFetch>>,
     find_source: Option<String>,
@@ -164,6 +173,7 @@ impl ModsUi {
             expanded: None,
             releases: HashMap::new(),
             checked_updates: false,
+            last_live: None,
             sources: Vec::new(),
             indexes: HashMap::new(),
             find_source: None,
@@ -219,10 +229,34 @@ impl ModsUi {
         });
     }
 
+    /// Called every frame: refreshes the mod indexes from the internet when
+    /// the launcher starts (a cached copy could predate mods added or updated
+    /// since) and checks installed mods for updates (if the player keeps that
+    /// on), then again every few hours while it stays open.
+    pub fn tick(&mut self, ctx: &egui::Context, env: &Env) {
+        let due = self.last_live.is_none_or(|t| t.elapsed() >= Duration::from_secs(dwrc_modhub::RELEASES_TTL));
+        if !due || self.op.is_some() {
+            return;
+        }
+        self.ensure_loaded(env);
+        self.last_live = Some(Instant::now());
+        self.fetch_indexes(ctx, true);
+        if env.cfg.mods.check_updates {
+            self.check_updates(ctx, true);
+        }
+    }
+
+    /// How many installed mods have an update waiting.
+    pub fn update_count(&self) -> usize {
+        self.mods.iter().filter(|m| self.offer(m).is_some()).count()
+    }
+
     fn fetch_indexes(&mut self, ctx: &egui::Context, force: bool) {
         for s in self.sources.clone() {
-            if !force && self.indexes.contains_key(&s.feed) {
-                continue;
+            match self.indexes.get(&s.feed) {
+                Some(Remote::Loading) => continue,
+                Some(_) if !force => continue,
+                _ => {}
             }
             self.indexes.insert(s.feed.clone(), Remote::Loading);
             self.spawn(ctx, move |hub| Msg::Index(s.feed.clone(), hub.fetch_index(&s, force)));
@@ -230,17 +264,25 @@ impl ModsUi {
     }
 
     fn check_updates(&mut self, ctx: &egui::Context, force: bool) {
-        for m in self.mods.clone() {
+        // One request per repository: an index hosting many mods is asked once.
+        let mut by_repo: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for m in &self.mods {
             if m.source != ModSource::User {
                 continue;
             }
             let Some(repo) = m.manifest.info.github_repo() else { continue };
-            if !force && self.releases.contains_key(m.id()) {
-                continue;
+            match self.releases.get(m.id()) {
+                Some(Remote::Loading) => continue,
+                Some(_) if !force => continue,
+                _ => {}
             }
-            let id = m.id().to_string();
-            self.releases.insert(id.clone(), Remote::Loading);
-            self.spawn(ctx, move |hub| Msg::Releases(id.clone(), hub.fetch_releases(&repo, &id, force)));
+            by_repo.entry(repo).or_default().push(m.id().to_string());
+        }
+        for (repo, ids) in by_repo {
+            for id in &ids {
+                self.releases.insert(id.clone(), Remote::Loading);
+            }
+            self.spawn(ctx, move |hub| Msg::ReleaseBatch(hub.fetch_releases_many(&repo, &ids, force)));
         }
         self.checked_updates = true;
     }
@@ -394,6 +436,11 @@ impl ModsUi {
                 }
                 Msg::Releases(id, f) => {
                     self.releases.insert(id, Remote::Ready(f));
+                }
+                Msg::ReleaseBatch(list) => {
+                    for (id, f) in list {
+                        self.releases.insert(id, Remote::Ready(f));
+                    }
                 }
                 Msg::Text(url, r) => {
                     self.texts.insert(url, Remote::Ready(r));
@@ -641,109 +688,123 @@ impl ModsUi {
         let info = &m.manifest.info;
         let expanded = self.expanded.as_deref() == Some(id.as_str());
         let any_on = GameId::ALL.iter().any(|g| env.cfg.mods.is_enabled(*g, &id) && m.supports(*g));
-        let stroke = if expanded { Stroke::new(1.0_f32, ACCENT_DIM) } else { Stroke::NONE };
-        egui::Frame::default().fill(CARD_BG).stroke(stroke).corner_radius(8.0).inner_margin(10.0).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(format!("{rank:>2}")).monospace().color(MUTED));
-                let title = RichText::new(m.name()).size(16.0).strong().color(if any_on { Color32::WHITE } else { MUTED });
-                if ui.add(egui::Label::new(title).sense(egui::Sense::click())).on_hover_text("Show details and options").clicked() {
-                    acts.push(Act::Expand(id.clone()));
-                }
-                ui.label(RichText::new(format!("v{}", info.version)).color(MUTED));
-                if !info.author.is_empty() {
-                    ui.label(RichText::new(format!("by {}", info.author)).color(MUTED));
-                }
-                for c in info.categories.iter().take(2) {
-                    tag(ui, &c.to_uppercase(), MUTED);
-                }
-                if m.source == ModSource::Bundled {
-                    tag(ui, "BUILT-IN", BLUE);
-                }
-                if info.experimental {
-                    tag(ui, "EXPERIMENTAL", WARN);
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.menu_button("More", |ui| {
-                        if ui.button("Move to top").clicked() {
-                            acts.push(Act::Edge(id.clone(), true));
-                            ui.close_menu();
-                        }
-                        if ui.button("Move to bottom").clicked() {
-                            acts.push(Act::Edge(id.clone(), false));
-                            ui.close_menu();
-                        }
-                        if info.github_repo().is_some() && m.source == ModSource::User && ui.button("Versions…").clicked() {
-                            acts.push(Act::Versions(id.clone()));
-                            ui.close_menu();
-                        }
-                        if ui.button("Open folder").clicked() {
-                            acts.push(Act::OpenFolder(m.root.clone()));
-                            ui.close_menu();
-                        }
-                        if !m.manifest.options.is_empty() && ui.button("Reset options").clicked() {
-                            acts.push(Act::ResetOptions(id.clone()));
-                            ui.close_menu();
-                        }
-                        if m.source == ModSource::User {
-                            ui.separator();
-                            if ui.button(RichText::new("Uninstall…").color(BAD)).clicked() {
-                                acts.push(Act::AskUninstall(id.clone()));
+        // The whole card opens and closes the details; its buttons still work
+        // on their own (the card's click is registered beneath them).
+        let card = ui.scope_builder(egui::UiBuilder::new().id_salt(("mod-card", id.as_str())).sense(egui::Sense::click()), |ui| {
+            let hover = ui.response().contains_pointer();
+            // Text in the card passes clicks to the card rather than selecting.
+            ui.style_mut().interaction.selectable_labels = false;
+            let stroke = if expanded { Stroke::new(1.0_f32, ACCENT_DIM) } else if hover { Stroke::new(1.0_f32, Color32::from_gray(64)) } else { Stroke::NONE };
+            let fill = if hover && !expanded { CARD_HOVER } else { CARD_BG };
+            egui::Frame::default().fill(fill).stroke(stroke).corner_radius(8.0).inner_margin(10.0).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("{rank:>2}")).monospace().color(MUTED));
+                    ui.label(RichText::new(m.name()).size(16.0).strong().color(if any_on { Color32::WHITE } else { MUTED }));
+                    ui.label(RichText::new(format!("v{}", info.version)).color(MUTED));
+                    if !info.author.is_empty() {
+                        ui.label(RichText::new(format!("by {}", info.author)).color(MUTED));
+                    }
+                    for c in info.categories.iter().take(2) {
+                        tag(ui, &c.to_uppercase(), MUTED);
+                    }
+                    if m.source == ModSource::Bundled {
+                        tag(ui, "BUILT-IN", BLUE);
+                    }
+                    if info.experimental {
+                        tag(ui, "EXPERIMENTAL", WARN);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.menu_button("More", |ui| {
+                            if ui.button("Move to top").clicked() {
+                                acts.push(Act::Edge(id.clone(), true));
                                 ui.close_menu();
+                            }
+                            if ui.button("Move to bottom").clicked() {
+                                acts.push(Act::Edge(id.clone(), false));
+                                ui.close_menu();
+                            }
+                            if info.github_repo().is_some() && m.source == ModSource::User && ui.button("Versions…").clicked() {
+                                acts.push(Act::Versions(id.clone()));
+                                ui.close_menu();
+                            }
+                            if ui.button("Open folder").clicked() {
+                                acts.push(Act::OpenFolder(m.root.clone()));
+                                ui.close_menu();
+                            }
+                            if !m.manifest.options.is_empty() && ui.button("Reset options").clicked() {
+                                acts.push(Act::ResetOptions(id.clone()));
+                                ui.close_menu();
+                            }
+                            if m.source == ModSource::User {
+                                ui.separator();
+                                if ui.button(RichText::new("Uninstall…").color(BAD)).clicked() {
+                                    acts.push(Act::AskUninstall(id.clone()));
+                                    ui.close_menu();
+                                }
+                            }
+                        });
+                        if ui.add_enabled(k + 1 < shown, egui::Button::new("Down")).clicked() {
+                            acts.push(Act::Move(id.clone(), 1));
+                        }
+                        if ui.add_enabled(k > 0, egui::Button::new("Up")).clicked() {
+                            acts.push(Act::Move(id.clone(), -1));
+                        }
+                        if let Some(o) = &offer {
+                            let mut r = ui.add_enabled_ui(self.op.is_none(), |ui| crate::footer::update_button(ui, &format!("Update to v{}", o.version))).inner;
+                            r = match &o.notes {
+                                Some(n) => r.on_hover_text(format!("What's new:\n{}", text::clean_markdown(n, 600))),
+                                None => r.on_hover_text(format!("Install {} v{}", m.name(), o.version)),
+                            };
+                            if r.clicked() {
+                                acts.push(Act::Install(Source::Url { url: o.url.clone(), id: id.clone(), label: format!("Updating {}", m.name()) }, true));
                             }
                         }
                     });
-                    if ui.add_enabled(k + 1 < shown, egui::Button::new("Down")).clicked() {
-                        acts.push(Act::Move(id.clone(), 1));
-                    }
-                    if ui.add_enabled(k > 0, egui::Button::new("Up")).clicked() {
-                        acts.push(Act::Move(id.clone(), -1));
-                    }
-                    if let Some(o) = &offer {
-                        let b = egui::Button::new(RichText::new(format!("Update to v{}", o.version)).color(Color32::BLACK)).fill(OK);
-                        let mut r = ui.add_enabled(self.op.is_none(), b);
-                        if let Some(n) = &o.notes {
-                            r = r.on_hover_text(text::clean_markdown(n, 600));
+                });
+                ui.horizontal_wrapped(|ui| {
+                    for g in GameId::ALL {
+                        if !m.supports(g) {
+                            continue;
                         }
-                        if r.clicked() {
-                            acts.push(Act::Install(Source::Url { url: o.url.clone(), id: id.clone(), label: format!("Updating {}", m.name()) }, true));
+                        let on = env.cfg.mods.is_enabled(g, &id);
+                        let col = game_color(g);
+                        let txt = RichText::new(format!("{} {}", if on { "✔" } else { "  " }, game_short(g))).strong().color(if on { Color32::BLACK } else { col });
+                        let b = egui::Button::new(txt).fill(if on { col } else { Color32::TRANSPARENT }).stroke(Stroke::new(1.0_f32, col)).min_size(Vec2::new(58.0, 22.0));
+                        let hover = format!("{} for {}", if on { "On" } else { "Off" }, g.title());
+                        if ui.add_enabled(m.is_usable(), b).on_hover_text(hover).clicked() {
+                            acts.push(Act::Toggle(id.clone(), g, !on));
                         }
+                    }
+                    if !info.description.is_empty() && !expanded {
+                        ui.label(RichText::new(text::preview_line(&info.description, 110)).color(MUTED));
                     }
                 });
+                for p in &m.problems {
+                    ui.label(RichText::new(format!("✖ {p}")).color(BAD));
+                }
+                if let Some(list) = skips {
+                    for (g, why) in list {
+                        if *why != Skip::WrongGame {
+                            ui.label(RichText::new(format!("⚠ Not loading in {}: {why}", game_short(*g))).color(WARN));
+                        }
+                    }
+                }
+                if expanded {
+                    ui.separator();
+                    // Clicks among the details and options stay there (they
+                    // don't close the card), and its text can be selected.
+                    ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
+                        ui.style_mut().interaction.selectable_labels = true;
+                        self.mod_details(ui, env, m, offer.as_ref(), acts);
+                    });
+                }
             });
-            ui.horizontal_wrapped(|ui| {
-                for g in GameId::ALL {
-                    if !m.supports(g) {
-                        continue;
-                    }
-                    let on = env.cfg.mods.is_enabled(g, &id);
-                    let col = game_color(g);
-                    let txt = RichText::new(format!("{} {}", if on { "✔" } else { "  " }, game_short(g))).strong().color(if on { Color32::BLACK } else { col });
-                    let b = egui::Button::new(txt).fill(if on { col } else { Color32::TRANSPARENT }).stroke(Stroke::new(1.0_f32, col)).min_size(Vec2::new(58.0, 22.0));
-                    let hover = format!("{} for {}", if on { "On" } else { "Off" }, g.title());
-                    if ui.add_enabled(m.is_usable(), b).on_hover_text(hover).clicked() {
-                        acts.push(Act::Toggle(id.clone(), g, !on));
-                    }
-                }
-                if !info.description.is_empty() && !expanded {
-                    ui.label(RichText::new(text::preview_line(&info.description, 110)).color(MUTED));
-                }
-            });
-            for p in &m.problems {
-                ui.label(RichText::new(format!("✖ {p}")).color(BAD));
-            }
-            if let Some(list) = skips {
-                for (g, why) in list {
-                    if *why != Skip::WrongGame {
-                        ui.label(RichText::new(format!("⚠ Not loading in {}: {why}", game_short(*g))).color(WARN));
-                    }
-                }
-            }
-            if expanded {
-                ui.separator();
-                self.mod_details(ui, env, m, offer.as_ref(), acts);
-            }
         });
+        let card = card.response.on_hover_cursor(egui::CursorIcon::PointingHand);
+        if card.clicked() {
+            acts.push(Act::Expand(id.clone()));
+        }
         ui.add_space(6.0);
     }
 
@@ -1449,8 +1510,8 @@ fn install_button(ui: &mut egui::Ui, e: &IndexEntry, installed: Option<&ModInfo>
             ui.add_enabled(false, egui::Button::new(format!("✔ Installed v{}", m.version())));
         }
         (Some(m), Ok(_)) => {
-            let b = egui::Button::new(RichText::new(format!("Update v{} to v{listed}", m.version())).color(Color32::BLACK)).fill(OK);
-            if ui.add_enabled(idle, b).clicked() {
+            let r = ui.add_enabled_ui(idle, |ui| crate::footer::update_button(ui, &format!("Update to v{listed}"))).inner;
+            if r.on_hover_text(format!("You have v{}", m.version())).clicked() {
                 acts.push(Act::InstallListing(feed.to_string(), e.id.clone()));
             }
         }

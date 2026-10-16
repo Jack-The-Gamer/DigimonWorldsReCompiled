@@ -21,7 +21,7 @@ pub const KOFI_URL: &str = "https://ko-fi.com/jackthegamer7";
 pub const GITHUB_URL: &str = "https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled";
 const DISCORD_FILL: Color32 = Color32::from_rgb(88, 101, 242);
 const KOFI_FILL: Color32 = Color32::from_rgb(255, 94, 91);
-const UPDATE_FILL: Color32 = Color32::from_rgb(214, 110, 10);
+pub(crate) const UPDATE_FILL: Color32 = Color32::from_rgb(214, 110, 10);
 
 enum Task {
     Idle,
@@ -371,13 +371,25 @@ enum Icon {
 /// A filled button with a small drawn icon (drawn, so it never depends on
 /// which symbols the font has).
 fn icon_button(ui: &mut egui::Ui, icon: Icon, label: &str, fill: Color32) -> egui::Response {
-    let font = FontId::proportional(14.5);
+    icon_button_sized(ui, icon, label, fill, 14.5, 16.0, Vec2::new(12.0, 7.0))
+}
+
+/// The "Update to vX" button, as on the Games page, sized for a list row
+/// (the Mods page shows it on each mod with an update).
+pub(crate) fn update_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    icon_button_sized(ui, Icon::Download, label, UPDATE_FILL, 13.5, 14.0, Vec2::new(9.0, 4.0))
+}
+
+fn icon_button_sized(ui: &mut egui::Ui, icon: Icon, label: &str, fill: Color32, font_size: f32, icon_size: f32, pad: Vec2) -> egui::Response {
+    let font = FontId::proportional(font_size);
     let galley = ui.painter().layout_no_wrap(label.to_string(), font, Color32::WHITE);
-    let (icon_size, gap, pad) = (16.0, 8.0, Vec2::new(12.0, 7.0));
+    let gap = icon_size / 2.0;
     let size = Vec2::new(pad.x * 2.0 + icon_size + gap + galley.size().x, pad.y * 2.0 + galley.size().y.max(icon_size));
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     if ui.is_rect_visible(rect) {
-        let fill = if resp.is_pointer_button_down_on() {
+        let fill = if !ui.is_enabled() {
+            scale(fill, 0.55)
+        } else if resp.is_pointer_button_down_on() {
             scale(fill, 0.85)
         } else if resp.hovered() {
             scale(fill, 1.15)

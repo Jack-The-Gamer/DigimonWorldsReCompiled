@@ -290,12 +290,26 @@ impl App {
                         if ui.add(close).on_hover_text("Quit Digimon Worlds Re:Compiled").clicked() {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         }
+                        let mod_updates = self.mods_ui.update_count();
                         for (screen, label) in [(Screen::Settings, "⚙ Settings"), (Screen::Mods, "Mods"), (Screen::Library, "▶ Games")] {
                             let sel = self.screen == screen;
                             let txt = RichText::new(label).size(16.0).strong().color(if sel { Color32::WHITE } else { MUTED });
                             let b = egui::Button::new(txt).fill(if sel { ACCENT_DIM } else { Color32::TRANSPARENT }).min_size(Vec2::new(96.0, 30.0));
-                            if ui.add(b).clicked() {
+                            let mut r = ui.add(b);
+                            if screen == Screen::Mods && mod_updates > 0 {
+                                // A count of mods with updates, beside the label.
+                                let c = egui::pos2(r.rect.center().x + 33.0, r.rect.center().y);
+                                ui.painter().circle(c, 9.0, crate::footer::UPDATE_FILL, Stroke::new(1.5_f32, PANEL_BG));
+                                let n = if mod_updates > 9 { "9+".to_string() } else { mod_updates.to_string() };
+                                ui.painter().text(c, Align2::CENTER_CENTER, n, egui::FontId::proportional(12.0), Color32::WHITE);
+                                let s = if mod_updates == 1 { "1 mod has an update" } else { "mods have updates" };
+                                r = r.on_hover_text(if mod_updates == 1 { s.to_string() } else { format!("{mod_updates} {s}") });
+                            }
+                            if r.clicked() {
                                 self.screen = screen;
+                                if screen == Screen::Mods && mod_updates > 0 {
+                                    self.mods_ui.tab = Tab::Installed;
+                                }
                             }
                         }
                     });
@@ -1014,6 +1028,8 @@ impl eframe::App for App {
         self.poll_job();
         self.updater.poll(ctx);
         let mut env = crate::mods_page::Env { cfg: &mut self.cfg, paths: &self.paths, lib: &self.lib, running: self.emu.as_ref().map(|e| e.game) };
+        // Mod indexes and mod updates: asked for when the launcher starts.
+        self.mods_ui.tick(ctx, &env);
         if self.mods_ui.poll(ctx, &mut env) {
             self.save_cfg();
         }

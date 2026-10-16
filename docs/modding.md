@@ -9,22 +9,27 @@ Releases.
 
 * **Installed** lists every mod in one shared **load order** (top loads first;
   when two mods change the same thing, the lower one wins). Each mod has a
-  switch per game (**DW1 / DW2 / DW3**) for the games it supports. Click a
-  mod's name for its details and options; **More** has *Move to top/bottom*,
+  switch per game (**DW1 / DW2 / DW3**) for the games it supports. Click
+  anywhere on a mod's card for its details and options (click it again to
+  close them); **More** has *Move to top/bottom*,
   *Versions…*, *Open folder*, *Reset options* and *Uninstall…*.
 * **Find mods** browses the mod indexes: the built-in
   [Re:Compiled index](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index)
   plus any you add with **Indexes…** (paste `owner/repo`, the repository's
   GitHub link, or a feed URL). Filter by game and category, sort by name,
   downloads, trending or last update, open **Details** for the full
-  description, and **Install**. Listings are refreshed daily; **Refresh**
+  description, and **Install**. Listings are refreshed every time the
+  launcher starts (and every six hours while it stays open); **Refresh**
   forces it. Offline, the last copy is shown.
 * **Import .zip…** (or drop a `.zip` on the window) installs a mod you
   downloaded. Installing switches the mod on for every game it supports.
-* **Updates:** mods that name their GitHub repository are checked when the
-  Mods page opens (turn this off under **Options**). **Update** /
-  **Update all** install the newest release; **Versions…** installs any
-  release, including older ones (roll back).
+* **Updates:** mods that name their GitHub repository are checked every time
+  the launcher starts, and every six hours while it stays open (turn this off
+  under **Options**). Mods from one repository, such as those hosted in an
+  index, are checked with a single request. The **Mods** tab shows how many
+  mods have an update, and each of those mods gets an **Update to vX**
+  button (hover it for what's new). **Update all** installs every update;
+  **Versions…** installs any release, including older ones (roll back).
 * **Options → Safe mode** starts games with no mods at all, without losing
   your choices — useful when tracking down a problem.
 * In game, **F10** shows the running game's mods: switch them on or off and
