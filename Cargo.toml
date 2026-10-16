@@ -7,17 +7,18 @@ members = [
     "crates/dwrc-recomp",
     "crates/dwrc-mods",
     "crates/dwrc-runtime",
+    "crates/dwrc-modhub",
     "apps/dwrc",
     "apps/dwrc-cli",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["Digimon Worlds Re:Compiled contributors"]
-repository = "https://github.com/your-name/DigimonWorldsReCompiled"
-rust-version = "1.84"
+repository = "https://github.com/DigimonWorldsReCompiled/DigimonWorldsReCompiled"
+rust-version = "1.85"
 
 [workspace.dependencies]
 dwrc-disc = { path = "crates/dwrc-disc" }
@@ -26,6 +27,7 @@ dwrc-psx = { path = "crates/dwrc-psx" }
 dwrc-recomp = { path = "crates/dwrc-recomp" }
 dwrc-mods = { path = "crates/dwrc-mods" }
 dwrc-runtime = { path = "crates/dwrc-runtime" }
+dwrc-modhub = { path = "crates/dwrc-modhub" }
 
 anyhow = "1"
 thiserror = "2"

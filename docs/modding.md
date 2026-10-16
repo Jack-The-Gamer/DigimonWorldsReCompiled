@@ -1,31 +1,74 @@
 # Modding guide
 
-A mod is a folder with a `mod.toml` file. Put mod folders in your mods folder:
+Mods are handled the way Gen1Recomp handles them: one **Mods** page in the
+launcher (next to Games and Settings), mods installed from `.zip` files or
+from **mod indexes** on GitHub, and updates read from each mod's own GitHub
+Releases.
 
-```
-<data folder>/mods/dw1/<your-mod>/mod.toml     # Digimon World
-<data folder>/mods/dw2/<your-mod>/mod.toml     # Digimon World 2
-<data folder>/mods/dw3/<your-mod>/mod.toml     # Digimon World 3 / 2003
-<data folder>/mods/any/<your-mod>/mod.toml     # mods for every game
-```
+## Using mods
 
-(The **Open mods folder** button in the mod manager takes you there.) Mods shipped with the program live in the `mods/` folder next to it; a mod in your folder with the same `id` takes precedence.
+* **Installed** lists every mod in one shared **load order** (top loads first;
+  when two mods change the same thing, the lower one wins). Each mod has a
+  switch per game (**DW1 / DW2 / DW3**) for the games it supports. Click a
+  mod's name for its details and options; **More** has *Move to top/bottom*,
+  *Versions…*, *Open folder*, *Reset options* and *Uninstall…*.
+* **Find mods** browses the mod indexes: the built-in
+  [Re:Compiled index](https://github.com/DigimonWorldsReCompiled/mod-index)
+  plus any you add with **Indexes…** (paste `owner/repo`, the repository's
+  GitHub link, or a feed URL). Filter by game and category, sort by name,
+  downloads, trending or last update, open **Details** for the full
+  description, and **Install**. Listings are refreshed daily; **Refresh**
+  forces it. Offline, the last copy is shown.
+* **Import .zip…** (or drop a `.zip` on the window) installs a mod you
+  downloaded. Installing switches the mod on for every game it supports.
+* **Updates:** mods that name their GitHub repository are checked when the
+  Mods page opens (turn this off under **Options**). **Update** /
+  **Update all** install the newest release; **Versions…** installs any
+  release, including older ones (roll back).
+* **Options → Safe mode** starts games with no mods at all, without losing
+  your choices — useful when tracking down a problem.
+* In game, **F10** shows the running game's mods: switch them on or off and
+  change options; changes apply when the game restarts.
 
-Enable, order and configure mods from the game's **Mods** button in the launcher, or press **F10** while playing. Enabled mods load top to bottom; later mods win when two touch the same thing. Changes take effect when the game (re)starts.
+Mods are installed into `mods/<id>/` in your data folder (**Open mods
+folder**); one copy serves every game it supports. Mods shipped with the
+program live in the `mods/` folder next to it, and an installed mod with the
+same `id` overrides a shipped one. Older per-game folders (`mods/dw1/…`,
+`mods/any/…`) are still read.
+
+### Safety
+
+Mod scripts run in a sandbox: only Lua's `string`, `table`, `math`, `utf8`
+and `coroutine` libraries plus `os.time`/`os.clock`/`os.difftime`, no file,
+network or OS access, no binary chunks, and `require` only loads `.lua` files
+from the mod's own folder. A mod can change the emulated game and its own
+saved data, nothing else. Archives are checked before anything is copied (one
+mod per `.zip`, no paths that escape the mod folder, size limits), and an
+install that fails leaves the previous version untouched.
 
 ## `mod.toml`
 
 ```toml
 [mod]
-id = "my-mod"                # letters, digits, '-' and '_'
+id = "my-mod"                # letters, digits, '-' and '_'; names the install folder
 name = "My Mod"
-version = "1.0.0"
+version = "1.0.0"            # semver
 author = "you"
 description = "What it does."
-game = "dw1"                 # dw1 | dw2 | dw3 | any
+game = "dw1"                 # dw1 | dw2 | dw3 | any — or games = ["dw1", "dw2"]
 serials = ["SLUS-01032"]     # optional: only these releases
 script = "main.lua"          # optional
 files_dir = "files"          # optional, default "files"
+github = "you/my-mod"        # optional: Releases carry updates (see Publishing)
+homepage = "https://…"       # optional
+categories = ["QOL"]         # 1-4 of GAMEPLAY CONTENT BALANCE ART AUDIO UI QOL
+                             # TRANSLATION TOTAL_CONVERSION LIBRARY TOOL OTHER
+tags = ["text", "speed"]     # optional
+license = "MIT"              # optional
+engine = ">=0.2"             # optional: Re:Compiled versions it works with
+dependencies = ["core-lib@>=1.2"]   # optional: mods that must also be on
+conflicts = ["other-mod"]           # optional: mods it cannot run with
+experimental = false         # optional: marks unfinished work
 
 [[option]]                   # shown in the mod manager
 id = "multiplier"
@@ -49,6 +92,36 @@ file = "data/thing.bin"
 max_sectors = 40             # refuse if the data would overflow this
 ```
 
+When a game starts, the switched-on mods load in load order. A mod is skipped
+(and the Mods page says why) when it has errors, is not for this game or
+release, needs a newer Re:Compiled (`engine`), lacks a dependency that is
+installed and switched on, or conflicts with a mod earlier in the order.
+Dependencies are loaded before the mods that need them.
+
+## Publishing a mod
+
+1. Put the mod in a GitHub repository with `mod.toml` at its root and set
+   `github = "you/your-mod"`.
+2. For each version, bump `version` and publish a **GitHub Release** tagged
+   `v<version>` with **`<id>-<version>.zip`** attached (an `<id>/` folder with
+   the mod inside). `dwrc-cli mod pack <folder>` builds that file;
+   [`templates/release-mod.yml`](templates/release-mod.yml) is a GitHub
+   Actions workflow that builds and publishes it whenever you push a tag.
+3. List it in the [mod index](https://github.com/DigimonWorldsReCompiled/mod-index)
+   with a pull request adding `mods/<You>@<id>/meta.json` and
+   `description.md`. The index follows your releases nightly, so new versions
+   need no further pull requests.
+
+Players who installed your mod are offered each new release in the launcher.
+Release tags may also be `<id>-v1.2.0` when one repository holds several mods.
+Assets are chosen as `<id>-<version>.zip`, then a `.zip` starting with the id,
+then the first `.zip`; the newest stable release is preferred over a newer
+pre-release. `dwrc-cli mod validate <folder>` checks a mod before you publish.
+
+Anyone can run their own index: a repository laid out like the Re:Compiled
+index, published to GitHub Pages, can be added in **Indexes…** by its
+`owner/repo`.
+
 ## Replacing files
 
 ### Digimon World (ISO filesystem)
@@ -63,7 +136,7 @@ The player's image is never modified; replacements live in a virtual disc built 
 
 ## Lua scripts
 
-Scripts run in an isolated Lua 5.4 state per mod. The `dwrc` table:
+Scripts run in an isolated, sandboxed Lua 5.4 state per mod (see *Safety*). The `dwrc` table:
 
 | | |
 |---|---|
@@ -72,7 +145,7 @@ Scripts run in an isolated Lua 5.4 state per mod. The `dwrc` table:
 | `dwrc.options` | this mod's option values, by id |
 | `dwrc.data` | a table saved per mod (in `mod-data/<game>/<mod>/data.json`) when the game closes or on `dwrc.save()` |
 | `dwrc.buttons` | bit masks: `dwrc.buttons.Cross`, `.Start`, `.Up`, … |
-| `dwrc.log(text)` | write to the log (shown in the F10 mod log) |
+| `dwrc.log(text)` | write to the log (shown in the F10 mod log); `print` does the same |
 | `dwrc.on_frame(fn(ctx))` | after every video frame |
 | `dwrc.on_input(fn(buttons) -> buttons)` | before every frame; return a modified controller state |
 | `dwrc.on_exec(addr, fn(ctx) -> bool)` | when the CPU reaches `addr`; return `true` if you changed the PC |

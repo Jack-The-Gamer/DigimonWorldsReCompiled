@@ -10,7 +10,7 @@ Gen1Recomp, the project that inspired this one, re-implements Pokémon Red/Blue'
 * it runs against a precise model of the PlayStation hardware;
 * behaviour is checked against a reference interpreter.
 
-Gen1Recomp's *product* ideas are kept: one launcher, hash-verified player-supplied images, a generated per-user cache, portable mode, and a first-class mod platform with an in-game manager. Hand-written Rust replacements of individual game functions can be layered on top later (see *Native overrides* below), which is the path toward a full decompilation-style port without ever giving up exactness.
+Gen1Recomp's *product* ideas are kept: one launcher, hash-verified player-supplied images, a generated per-user cache, portable mode, and a first-class mod platform: a Mods page with `.zip` import, mod indexes on GitHub (ours built in), update checks and version rollback from each mod's GitHub Releases, and an in-game manager. Hand-written Rust replacements of individual game functions can be layered on top later (see *Native overrides* below), which is the path toward a full decompilation-style port without ever giving up exactness.
 
 ## Crates
 
@@ -20,7 +20,8 @@ Gen1Recomp's *product* ideas are kept: one launcher, hash-verified player-suppli
 | `dwrc-mips` | R3000A instruction decoding, control-flow classification, register usage, disassembly. Shared by everything that looks at code. |
 | `dwrc-psx` | The console: bus, CPU + COP0 + reference interpreter, GTE, GPU, SPU, CD-ROM, MDEC, DMA, timers, interrupt controller, SIO (pads, memory cards). |
 | `dwrc-recomp` | Static recompiler (Cranelift), block cache, invalidation, validation. |
-| `dwrc-mods` | Mod manifests, discovery, virtual-disc file replacement, memory patches, Lua scripting. |
+| `dwrc-mods` | Mod manifests, discovery and load planning (games, dependencies, conflicts), `.zip` install/uninstall/pack, virtual-disc file replacement, memory patches, sandboxed Lua scripting. |
+| `dwrc-modhub` | Mod indexes (GitHub-hosted feeds), update checks against mods' GitHub Releases, downloads; caching and offline fallback. |
 | `dwrc-runtime` | Paths/portable mode, library import + verification, BIOS identification, settings, play sessions. |
 | `dwrc` | Launcher and player (egui/eframe, cpal audio, gilrs gamepads). |
 | `dwrc-cli` | Developer tools (inspect discs, run headless, screenshots, validation, disassembly). |

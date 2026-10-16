@@ -6,3 +6,4 @@ author = "Digimon Worlds Re:Compiled"
 description = "Counts how long you have played each game (stored with the mod's own save data) and reports it in the mod log. A small example of persistent per-mod data."
 game = "any"
 script = "main.lua"
+categories = ["TOOL"]

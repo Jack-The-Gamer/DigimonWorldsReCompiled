@@ -20,6 +20,13 @@
 //! `frame`, `buttons`, `pressed`. An exec hook that changes the PC (for
 //! example with `ctx:ret(value)` to replace a whole function) must return
 //! `true`.
+//!
+//! Scripts are sandboxed: only the `string`, `table`, `math`, `utf8` and
+//! `coroutine` libraries are available, plus `os.time`, `os.clock` and `os.difftime`;
+//! there is no `io`, no `os.execute`, no `debug`, no binary chunk loading,
+//! and `require` only loads `.lua` files from the mod's own folder. A mod
+//! installed from the internet can therefore touch the emulated console
+//! and its own saved data, but not the player's computer.
 
 use anyhow::{anyhow, Result};
 use dwrc_psx::{Bus, Button, Cpu, HookAction};
@@ -142,9 +149,81 @@ fn toml_to_json(v: &toml::Value) -> serde_json::Value {
     }
 }
 
+/// Builds a Lua state with only the safe libraries, a text-only `load`, a
+/// `require` confined to `root`, and `print` routed to the log.
+fn sandboxed_lua(root: &std::path::Path, id: &str) -> mlua::Result<Lua> {
+    use mlua::{ChunkMode, LuaOptions, StdLib};
+    let lua = Lua::new_with(StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8 | StdLib::COROUTINE, LuaOptions::default())?;
+    lua.set_memory_limit(256 << 20)?;
+    let g = lua.globals();
+    for name in ["dofile", "loadfile"] {
+        g.raw_set(name, Value::Nil)?;
+    }
+    let string: mlua::Table = g.get("string")?;
+    string.raw_set("dump", Value::Nil)?;
+    // load(): text chunks only (binary chunks can break out of the VM).
+    lua.load(
+        r#"
+        local _load = load
+        load = function(chunk, name, _, env) return _load(chunk, name, "t", env) end
+        "#,
+    )
+    .set_mode(ChunkMode::Text)
+    .exec()?;
+    // A small, harmless part of `os`.
+    let os = lua.create_table()?;
+    os.set("time", lua.create_function(|_, t: Option<mlua::Table>| {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        if t.is_some() {
+            return Err(mlua::Error::runtime("os.time(table) is not available to mods"));
+        }
+        Ok(SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0))
+    })?)?;
+    let start = std::time::Instant::now();
+    os.set("clock", lua.create_function(move |_, ()| Ok(start.elapsed().as_secs_f64()))?)?;
+    os.set("difftime", lua.create_function(|_, (a, b): (f64, Option<f64>)| Ok(a - b.unwrap_or(0.0)))?)?;
+    g.set("os", os)?;
+    let mid = id.to_string();
+    g.set(
+        "print",
+        lua.create_function(move |_, args: mlua::MultiValue| {
+            let parts: Vec<String> = args.iter().map(|v| v.to_string().unwrap_or_else(|_| "?".into())).collect();
+            log::info!("[{mid}] {}", parts.join("\t"));
+            Ok(())
+        })?,
+    )?;
+    // require(): modules from the mod's own folder ("a.b" -> a/b.lua).
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let loaded = lua.create_table()?;
+    g.set(
+        "require",
+        lua.create_function(move |lua, name: String| {
+            if let Ok(v) = loaded.raw_get::<Value>(name.as_str()) {
+                if !v.is_nil() {
+                    return Ok(v);
+                }
+            }
+            if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')) || name.contains("..") {
+                return Err(mlua::Error::runtime(format!("require: invalid module name '{name}'")));
+            }
+            let file = root.join(format!("{}.lua", name.replace('.', "/")));
+            let ok = file.canonicalize().map(|f| f.starts_with(&root)).unwrap_or(false);
+            if !ok {
+                return Err(mlua::Error::runtime(format!("require: module '{name}' not found in the mod folder")));
+            }
+            let src = std::fs::read_to_string(&file).map_err(|e| mlua::Error::runtime(format!("require '{name}': {e}")))?;
+            let v: Value = lua.load(&src).set_name(name.as_str()).set_mode(ChunkMode::Text).call(name.as_str())?;
+            let v = if v.is_nil() { Value::Boolean(true) } else { v };
+            loaded.raw_set(name.as_str(), v.clone())?;
+            Ok(v)
+        })?,
+    )?;
+    Ok(lua)
+}
+
 impl ScriptHost {
     pub fn load(id: &str, game: dwrc_disc::GameId, path: &std::path::Path, options: crate::OptionValues, data_dir: PathBuf) -> Result<Self> {
-        let lua = Lua::new();
+        let lua = sandboxed_lua(path.parent().unwrap_or(std::path::Path::new(".")), id).map_err(|e| anyhow!("{e}"))?;
         let state = Arc::new(Mutex::new(HostState::default()));
         {
             let api = lua.create_table().map_err(|e| anyhow!("{e}"))?;
@@ -229,15 +308,10 @@ impl ScriptHost {
             .map_err(le)?;
             lua.globals().set("dwrc", api).map_err(le)?;
         }
-        // Make `require` resolve relative to the script's folder.
-        if let Some(dir) = path.parent() {
-            let pkg: mlua::Table = lua.globals().get("package").map_err(|e| anyhow!("{e}"))?;
-            let p = format!("{}/?.lua", dir.display()).replace('\\', "/");
-            pkg.set("path", p).map_err(|e| anyhow!("{e}"))?;
-        }
         let src = std::fs::read_to_string(path)?;
         lua.load(&src)
             .set_name(path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())
+            .set_mode(mlua::ChunkMode::Text)
             .exec()
             .map_err(|e| anyhow!("{e}"))?;
         Ok(Self { id: id.to_string(), lua, state, data_dir, installed: Vec::new() })
@@ -316,5 +390,30 @@ impl ScriptHost {
             log::warn!("[{}] saving data: {e}", self.id);
         }
         let _ = &self.data_dir;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sandbox_blocks_the_host() {
+        let d = std::env::temp_dir().join(format!("dwrc-sandbox-{}", std::process::id()));
+        std::fs::create_dir_all(d.join("lib")).unwrap();
+        std::fs::write(d.join("lib/util.lua"), "return { twice = function(x) return x * 2 end }").unwrap();
+        std::fs::write(d.join("secret.txt"), "x").unwrap();
+        let lua = sandboxed_lua(&d, "t").unwrap();
+        let run = |code: &str| lua.load(code).exec();
+        run("assert(require('lib.util').twice(21) == 42)").unwrap();
+        run("assert(io == nil and debug == nil and package == nil and dofile == nil and loadfile == nil)").unwrap();
+        run("assert(os.execute == nil and os.remove == nil and os.getenv == nil and type(os.time()) == 'number')").unwrap();
+        run("assert(string.dump == nil)").unwrap();
+        run("assert(load('return 1 + 1')() == 2)").unwrap();
+        assert!(run("require('..secret')").is_err());
+        assert!(run("require('missing')").is_err());
+        // Binary chunks are refused even when asked for explicitly.
+        run("local f, e = load('\\27Lua', 'x', 'b'); assert(f == nil)").unwrap();
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

@@ -1,5 +1,5 @@
 # A documented starting point for Digimon World mods.
-# Copy this folder into your mods folder (Settings > Data shows where),
+# Copy this folder into your mods folder (Mods > Open mods folder),
 # rename it, change the id, and start editing.
 
 [mod]
@@ -8,10 +8,16 @@ name = "Example Template (does nothing)"
 version = "0.1.0"
 author = "you"
 description = "A commented template showing every kind of change a mod can make. Enabling it changes nothing."
-game = "dw1"                 # dw1 | dw2 | dw3 | any
+game = "dw1"                 # dw1 | dw2 | dw3 | any, or games = ["dw1", "dw2"]
 serials = ["SLUS-01032"]     # optional: only load for these releases
 script = "main.lua"          # optional Lua script
 files_dir = "files"          # files/<ISO path> replaces that file on the disc
+categories = ["OTHER"]       # GAMEPLAY CONTENT BALANCE ART AUDIO UI QOL TRANSLATION
+                             # TOTAL_CONVERSION LIBRARY TOOL OTHER
+# github = "you/your-mod"    # Releases with <id>-<version>.zip turn on updates
+# engine = ">=0.2"           # Re:Compiled versions this mod works with
+# dependencies = ["some-lib@>=1.0"]   # mods that must also be switched on
+# conflicts = ["other-mod"]           # mods this one cannot run with
 
 # Options appear in the mod manager and are available to scripts as
 # dwrc.options.<id>.

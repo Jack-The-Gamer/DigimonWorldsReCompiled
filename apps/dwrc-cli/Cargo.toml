@@ -16,6 +16,7 @@ dwrc-psx.workspace = true
 dwrc-runtime.workspace = true
 dwrc-recomp.workspace = true
 dwrc-mods.workspace = true
+dwrc-modhub.workspace = true
 anyhow.workspace = true
 env_logger.workspace = true
 log.workspace = true

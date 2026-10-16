@@ -81,6 +81,27 @@ impl Paths {
         v
     }
 
+    /// Where mods are looked for, in priority order.
+    pub fn mod_roots(&self) -> Vec<(PathBuf, dwrc_mods::ModSource)> {
+        let mut v = vec![(self.user_mods_root(), dwrc_mods::ModSource::User)];
+        for r in self.bundled_mods_roots() {
+            if r != self.user_mods_root() && !v.iter().any(|(p, _)| *p == r) {
+                v.push((r, dwrc_mods::ModSource::Bundled));
+            }
+        }
+        v
+    }
+
+    /// Cached mod indexes, GitHub release lists and thumbnails.
+    pub fn modhub_cache_dir(&self) -> PathBuf {
+        self.root.join("cache").join("modhub")
+    }
+
+    /// Mod downloads in progress.
+    pub fn downloads_dir(&self) -> PathBuf {
+        self.root.join("cache").join("downloads")
+    }
+
     pub fn mod_data_dir(&self, g: GameId, mod_id: &str) -> PathBuf {
         self.root.join("mod-data").join(g.slug()).join(mod_id)
     }

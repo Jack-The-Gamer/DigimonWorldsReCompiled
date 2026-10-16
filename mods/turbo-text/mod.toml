@@ -6,6 +6,7 @@ author = "Digimon Worlds Re:Compiled"
 description = "Hold the turbo button to rapidly tap Cross, racing through dialogue. The game itself never sees the turbo button, so nothing changes unless you hold it."
 game = "any"
 script = "main.lua"
+categories = ["QOL"]
 
 [[option]]
 id = "hold"

@@ -4,7 +4,7 @@ use crate::audio::{self, AudioOut, AudioShared};
 use crate::emu::{EmuCmd, EmuHandle};
 use crate::input::{self, Input};
 use dwrc_disc::GameId;
-use dwrc_mods::{ModInfo, OptionKind};
+use crate::mods_page::{ModsUi, Tab};
 use dwrc_psx::Button;
 use dwrc_runtime::bios::region_label;
 use dwrc_runtime::config::{Aspect, EngineKind, Filter};
@@ -16,21 +16,21 @@ use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-const ACCENT: Color32 = Color32::from_rgb(255, 140, 26);
-const ACCENT_DIM: Color32 = Color32::from_rgb(120, 70, 20);
-const BLUE: Color32 = Color32::from_rgb(64, 156, 255);
-const CARD_BG: Color32 = Color32::from_rgb(28, 31, 38);
-const PANEL_BG: Color32 = Color32::from_rgb(18, 20, 25);
-const OK: Color32 = Color32::from_rgb(90, 200, 120);
-const WARN: Color32 = Color32::from_rgb(240, 190, 70);
-const BAD: Color32 = Color32::from_rgb(235, 90, 90);
-const MUTED: Color32 = Color32::from_rgb(150, 156, 168);
+pub(crate) const ACCENT: Color32 = Color32::from_rgb(255, 140, 26);
+pub(crate) const ACCENT_DIM: Color32 = Color32::from_rgb(120, 70, 20);
+pub(crate) const BLUE: Color32 = Color32::from_rgb(64, 156, 255);
+pub(crate) const CARD_BG: Color32 = Color32::from_rgb(28, 31, 38);
+pub(crate) const PANEL_BG: Color32 = Color32::from_rgb(18, 20, 25);
+pub(crate) const OK: Color32 = Color32::from_rgb(90, 200, 120);
+pub(crate) const WARN: Color32 = Color32::from_rgb(240, 190, 70);
+pub(crate) const BAD: Color32 = Color32::from_rgb(235, 90, 90);
+pub(crate) const MUTED: Color32 = Color32::from_rgb(150, 156, 168);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Screen {
     Library,
+    Mods,
     Settings,
-    Mods(GameId),
     Playing,
 }
 
@@ -65,14 +65,14 @@ pub struct App {
     show_mods_overlay: bool,
     rebinding: Option<Button>,
     fullscreen: bool,
-    mods_cache: HashMap<GameId, Vec<ModInfo>>,
-    selected_mod: Option<String>,
-    restart_needed: bool,
+    mods_ui: ModsUi,
     autostart: Option<GameId>,
+    files_hovering: bool,
+    open_files: Vec<std::path::PathBuf>,
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, autostart: Option<GameId>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, autostart: Option<GameId>, open_files: Vec<std::path::PathBuf>) -> Self {
         let paths = Paths::detect();
         let _ = paths.ensure();
         let lib = Library::load(&paths);
@@ -88,7 +88,11 @@ impl App {
         if fullscreen {
             cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
         }
+        let mods_ui = ModsUi::new(&paths);
         Self {
+            mods_ui,
+            files_hovering: false,
+            open_files,
             paths,
             lib,
             cfg,
@@ -108,9 +112,6 @@ impl App {
             show_mods_overlay: false,
             rebinding: None,
             fullscreen,
-            mods_cache: HashMap::new(),
-            selected_mod: None,
-            restart_needed: false,
             autostart,
         }
     }
@@ -123,11 +124,6 @@ impl App {
         if let Err(e) = self.cfg.save(&self.paths) {
             self.notify(format!("Could not save settings: {e}"), true);
         }
-    }
-
-    fn mods_for(&mut self, g: GameId) -> &Vec<ModInfo> {
-        let paths = self.paths.clone();
-        self.mods_cache.entry(g).or_insert_with(|| dwrc_runtime::available_mods(&paths, g))
     }
 
     // ------------------------------------------------------------------
@@ -148,7 +144,7 @@ impl App {
         self.last_seq = 0;
         self.show_pause = false;
         self.show_mods_overlay = false;
-        self.restart_needed = false;
+        self.mods_ui.changed_while_running = false;
         self.screen = Screen::Playing;
     }
 
@@ -264,11 +260,13 @@ impl App {
                     ui.label(RichText::new("DIGIMON WORLDS").size(22.0).strong().color(Color32::WHITE));
                     ui.label(RichText::new("Re:Compiled").size(22.0).strong().color(ACCENT));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.selectable_label(self.screen == Screen::Settings, "⚙ Settings").clicked() {
-                            self.screen = Screen::Settings;
-                        }
-                        if ui.selectable_label(self.screen == Screen::Library, "▶ Games").clicked() {
-                            self.screen = Screen::Library;
+                        for (screen, label) in [(Screen::Settings, "⚙ Settings"), (Screen::Mods, "Mods"), (Screen::Library, "▶ Games")] {
+                            let sel = self.screen == screen;
+                            let txt = RichText::new(label).size(16.0).strong().color(if sel { Color32::WHITE } else { MUTED });
+                            let b = egui::Button::new(txt).fill(if sel { ACCENT_DIM } else { Color32::TRANSPARENT }).min_size(Vec2::new(96.0, 30.0));
+                            if ui.add(b).clicked() {
+                                self.screen = screen;
+                            }
                         }
                     });
                 });
@@ -371,7 +369,10 @@ impl App {
         let status = self.lib.status(g);
         let entry = self.lib.games.get(&g).cloned();
         let thumb = self.thumbnail(ctx, g);
-        let enabled_mods = self.cfg.game_mods(g).enabled.len();
+        let enabled_mods = {
+            let env = crate::mods_page::Env { cfg: &mut self.cfg, paths: &self.paths, lib: &self.lib, running: None };
+            self.mods_ui.active_count(&env, g)
+        };
         egui::Frame::default().fill(CARD_BG).corner_radius(10.0).inner_margin(14.0).show(ui, |ui| {
           ui.vertical(|ui| {
             ui.set_width(w - 28.0);
@@ -437,10 +438,11 @@ impl App {
                     }
                 }
                 let label = if enabled_mods > 0 { format!("Mods ({enabled_mods})") } else { "Mods".to_string() };
-                if ui.button(label).clicked() {
-                    self.mods_cache.remove(&g);
-                    self.selected_mod = None;
-                    self.screen = Screen::Mods(g);
+                if ui.button(label).on_hover_text(format!("Mods that load for {}", g.title())).clicked() {
+                    self.mods_ui.game_filter = Some(g);
+                    self.mods_ui.search.clear();
+                    self.mods_ui.tab = Tab::Installed;
+                    self.screen = Screen::Mods;
                 }
             });
           });
@@ -553,158 +555,13 @@ impl App {
         });
     }
 
-    /// Shared by the Mods screen and the in-game (F10) overlay.
-    fn mod_manager_ui(&mut self, ui: &mut egui::Ui, g: GameId) {
-        let mods = self.mods_for(g).clone();
-        let mut gm = self.cfg.game_mods(g);
-        let mut changed = false;
-        if mods.is_empty() {
-            ui.label("No mods installed for this game yet.");
-        }
-        ui.horizontal(|ui| {
-            if ui.button("Open mods folder").clicked() {
-                let dir = self.paths.user_mods_root().join(g.slug());
-                let _ = std::fs::create_dir_all(&dir);
-                open_folder(&dir);
-            }
-            if ui.button("⟳ Rescan").clicked() {
-                self.mods_cache.remove(&g);
-            }
-        });
-        ui.label(
-            RichText::new(format!(
-                "Put mod folders in {} (each with a mod.toml). Enabled mods load top to bottom.",
-                self.paths.user_mods_root().join(g.slug()).display()
-            ))
-            .color(MUTED)
-            .small(),
-        );
-        ui.separator();
-        // Enabled mods first in load order, then the rest.
-        let mut order: Vec<&ModInfo> = gm.enabled.iter().filter_map(|id| mods.iter().find(|m| m.id() == id)).collect();
-        for m in &mods {
-            if !gm.enabled.iter().any(|e| e == m.id()) {
-                order.push(m);
-            }
-        }
-        for m in order {
-            let id = m.id().to_string();
-            let mut on = gm.enabled.contains(&id);
-            ui.horizontal(|ui| {
-                let resp = ui.add_enabled(m.is_usable(), egui::Checkbox::new(&mut on, ""));
-                if resp.changed() {
-                    if on {
-                        gm.enabled.push(id.clone());
-                    } else {
-                        gm.enabled.retain(|e| e != &id);
-                    }
-                    changed = true;
-                }
-                let sel = self.selected_mod.as_deref() == Some(&id);
-                if ui
-                    .selectable_label(sel, RichText::new(format!("{}  v{}", m.manifest.info.name, m.manifest.info.version)).strong())
-                    .clicked()
-                {
-                    self.selected_mod = if sel { None } else { Some(id.clone()) };
-                }
-                if !m.manifest.info.author.is_empty() {
-                    ui.label(RichText::new(format!("by {}", m.manifest.info.author)).color(MUTED));
-                }
-                if on {
-                    if let Some(pos) = gm.enabled.iter().position(|e| e == &id) {
-                        if ui.small_button("Up").clicked() && pos > 0 {
-                            gm.enabled.swap(pos, pos - 1);
-                            changed = true;
-                        }
-                        if ui.small_button("Down").clicked() && pos + 1 < gm.enabled.len() {
-                            gm.enabled.swap(pos, pos + 1);
-                            changed = true;
-                        }
-                    }
-                }
-            });
-            for p in &m.problems {
-                ui.label(RichText::new(format!("   ✖ {p}")).color(BAD));
-            }
-            if self.selected_mod.as_deref() == Some(&id) {
-                egui::Frame::default().fill(Color32::from_rgb(24, 27, 33)).inner_margin(10.0).corner_radius(6.0).show(ui, |ui| {
-                    if !m.manifest.info.description.is_empty() {
-                        ui.label(&m.manifest.info.description);
-                    }
-                    let saved = gm.options.entry(id.clone()).or_default();
-                    for o in &m.manifest.options {
-                        let cur = saved.get(&o.id).cloned().unwrap_or_else(|| o.default.clone());
-                        ui.horizontal(|ui| {
-                            ui.label(&o.name);
-                            match o.kind {
-                                OptionKind::Bool => {
-                                    let mut v = cur.as_bool().unwrap_or(false);
-                                    if ui.checkbox(&mut v, "").changed() {
-                                        saved.insert(o.id.clone(), toml::Value::Boolean(v));
-                                        changed = true;
-                                    }
-                                }
-                                OptionKind::Int => {
-                                    let mut v = cur.as_integer().unwrap_or(0);
-                                    let lo = o.min.unwrap_or(i32::MIN as f64) as i64;
-                                    let hi = o.max.unwrap_or(i32::MAX as f64) as i64;
-                                    if ui.add(egui::DragValue::new(&mut v).range(lo..=hi)).changed() {
-                                        saved.insert(o.id.clone(), toml::Value::Integer(v));
-                                        changed = true;
-                                    }
-                                }
-                                OptionKind::Float => {
-                                    let mut v = cur.as_float().or_else(|| cur.as_integer().map(|i| i as f64)).unwrap_or(0.0);
-                                    let lo = o.min.unwrap_or(f64::MIN);
-                                    let hi = o.max.unwrap_or(f64::MAX);
-                                    if ui.add(egui::DragValue::new(&mut v).range(lo..=hi).speed(0.05)).changed() {
-                                        saved.insert(o.id.clone(), toml::Value::Float(v));
-                                        changed = true;
-                                    }
-                                }
-                                OptionKind::Choice => {
-                                    let mut v = cur.as_str().unwrap_or("").to_string();
-                                    egui::ComboBox::from_id_salt(format!("{id}-{}", o.id)).selected_text(&v).show_ui(ui, |ui| {
-                                        for c in &o.choices {
-                                            if ui.selectable_value(&mut v, c.clone(), c).changed() {
-                                                saved.insert(o.id.clone(), toml::Value::String(v.clone()));
-                                                changed = true;
-                                            }
-                                        }
-                                    });
-                                }
-                            }
-                            if !o.description.is_empty() {
-                                ui.label(RichText::new(&o.description).color(MUTED).small());
-                            }
-                        });
-                    }
-                });
-            }
-        }
-        if changed {
-            *self.cfg.game_mods_mut(g) = gm;
-            self.save_cfg();
-            if self.emu.is_some() {
-                self.restart_needed = true;
-            }
-        }
-    }
-
-    fn mods_screen(&mut self, ctx: &egui::Context, g: GameId) {
+    fn mods_screen(&mut self, ctx: &egui::Context) {
         self.top_bar(ctx);
         egui::CentralPanel::default().frame(egui::Frame::default().fill(Color32::from_rgb(13, 14, 18)).inner_margin(24.0)).show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("← Back").clicked() {
-                    self.screen = Screen::Library;
-                }
-                ui.label(RichText::new(format!("Mods for {}", g.title())).size(20.0).strong());
-            });
-            ui.add_space(8.0);
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.set_max_width(820.0);
-                self.mod_manager_ui(ui, g);
-            });
+            let mut env = crate::mods_page::Env { cfg: &mut self.cfg, paths: &self.paths, lib: &self.lib, running: self.emu.as_ref().map(|e| e.game) };
+            if self.mods_ui.show(ui, &mut env) {
+                self.save_cfg();
+            }
         });
     }
 
@@ -878,10 +735,16 @@ impl App {
                             }
                         });
                     }
+                    let mut changed = false;
                     egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
-                        self.mod_manager_ui(ui, g);
+                        let mut env = crate::mods_page::Env { cfg: &mut self.cfg, paths: &self.paths, lib: &self.lib, running: Some(g) };
+                        changed = self.mods_ui.game_panel(ui, &mut env, g);
                     });
-                    if self.restart_needed {
+                    if changed {
+                        self.save_cfg();
+                    }
+                    ui.label(RichText::new("Install, update and reorder mods on the Mods page (press Esc, then Quit to game list).").color(MUTED).small());
+                    if self.mods_ui.changed_while_running {
                         ui.separator();
                         ui.horizontal(|ui| {
                             ui.label(RichText::new("Changes apply when the game restarts.").color(WARN));
@@ -901,7 +764,46 @@ impl App {
         ctx.request_repaint();
     }
 
+    /// Files dropped on the window: a mod `.zip` is installed, a disc image
+    /// is imported. (Not while playing, so a stray drop never interrupts.)
+    fn handle_dropped_files(&mut self, ctx: &egui::Context) {
+        let (hovering, dropped) = ctx.input(|i| (!i.raw.hovered_files.is_empty(), i.raw.dropped_files.clone()));
+        self.files_hovering = hovering && self.screen != Screen::Playing;
+        if self.screen == Screen::Playing {
+            return;
+        }
+        let mut files: Vec<std::path::PathBuf> = std::mem::take(&mut self.open_files);
+        files.extend(dropped.into_iter().filter_map(|f| f.path));
+        for path in files {
+            self.open_file(ctx, path);
+        }
+    }
+
+    fn open_file(&mut self, ctx: &egui::Context, path: std::path::PathBuf) {
+        let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        match ext.as_str() {
+            "zip" => {
+                self.screen = Screen::Mods;
+                let env = crate::mods_page::Env { cfg: &mut self.cfg, paths: &self.paths, lib: &self.lib, running: self.emu.as_ref().map(|e| e.game) };
+                self.mods_ui.import_zip(ctx, &env, path);
+            }
+            "cue" | "bin" if self.job.is_none() => {
+                self.screen = Screen::Library;
+                self.start_import_disc(path);
+            }
+            _ => self.notify(format!("{} is not a mod (.zip) or a disc image (.cue/.bin).", path.display()), true),
+        }
+    }
+
     fn overlays(&mut self, ctx: &egui::Context) {
+        if self.files_hovering {
+            let screen = ctx.screen_rect();
+            let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("drop")));
+            p.rect_filled(screen, 0.0, Color32::from_black_alpha(190));
+            p.rect_stroke(screen.shrink(18.0), 12.0, Stroke::new(3.0_f32, ACCENT), egui::StrokeKind::Inside);
+            p.text(screen.center(), Align2::CENTER_CENTER, "Drop a mod .zip to install it\nor a disc image (.cue) to import it", egui::FontId::proportional(24.0), Color32::WHITE);
+            ctx.request_repaint();
+        }
         if let Some(job) = &self.job {
             let (what, f) = job.progress.lock().unwrap().clone();
             egui::Window::new(&job.label)
@@ -942,6 +844,14 @@ impl App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_job();
+        let mut env = crate::mods_page::Env { cfg: &mut self.cfg, paths: &self.paths, lib: &self.lib, running: self.emu.as_ref().map(|e| e.game) };
+        if self.mods_ui.poll(ctx, &mut env) {
+            self.save_cfg();
+        }
+        for (msg, err) in std::mem::take(&mut self.mods_ui.toasts) {
+            self.notify(msg, err);
+        }
+        self.handle_dropped_files(ctx);
         if let Some(g) = self.autostart.take() {
             self.start_game(g);
         }
@@ -953,7 +863,7 @@ impl eframe::App for App {
         match self.screen {
             Screen::Library => self.library_screen(ctx),
             Screen::Settings => self.settings_screen(ctx),
-            Screen::Mods(g) => self.mods_screen(ctx, g),
+            Screen::Mods => self.mods_screen(ctx),
             Screen::Playing => self.playing_screen(ctx),
         }
         self.overlays(ctx);
@@ -981,10 +891,10 @@ fn pretty_button(b: Button) -> &'static str {
         Button::Down => "D-pad Down",
         Button::Left => "D-pad Left",
         Button::Right => "D-pad Right",
-        Button::Cross => "✕ Cross",
-        Button::Circle => "○ Circle",
-        Button::Square => "□ Square",
-        Button::Triangle => "△ Triangle",
+        Button::Cross => "Cross",
+        Button::Circle => "Circle",
+        Button::Square => "Square",
+        Button::Triangle => "Triangle",
         Button::Start => "Start",
         Button::Select => "Select",
         Button::L1 => "L1",
@@ -1003,6 +913,7 @@ fn style(ctx: &egui::Context) {
     v.selection.bg_fill = ACCENT_DIM;
     v.selection.stroke = Stroke::new(1.0_f32, ACCENT);
     v.hyperlink_color = BLUE;
+    v.extreme_bg_color = Color32::from_rgb(30, 34, 42);
     v.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, ACCENT);
     ctx.set_visuals(v);
     ctx.style_mut(|s| {
@@ -1011,7 +922,7 @@ fn style(ctx: &egui::Context) {
     });
 }
 
-fn open_folder(p: &std::path::Path) {
+pub(crate) fn open_folder(p: &std::path::Path) {
     #[cfg(target_os = "windows")]
     let _ = std::process::Command::new("explorer").arg(p).spawn();
     #[cfg(target_os = "macos")]

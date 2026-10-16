@@ -20,6 +20,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some("run") => run(&args[1..]),
+        Some("mod") => mod_cmd(&args[1..]),
         Some("disasm") => disasm(&args[1..]),
         Some("import") => {
             // import <data-root> <folder>
@@ -34,7 +35,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         _ => bail!(
-            "commands:\n  inspect <cue>\n  extract <cue> <path> <out>\n  run <cue> --bios <bin> [--frames N] [--shots dir] [--every K] [--fast] [--input frame:button:len,...]\n  disasm <exe> <addr> <count>"
+            "commands:\n  inspect <cue>\n  extract <cue> <path> <out>\n  run <cue> --bios <bin> [--frames N] [--shots dir] [--every K] [--fast] [--input frame:button:len,...] [--mod <folder>]...\n  disasm <exe> <addr> <count>\n  mod validate <folder>              check a mod folder\n  mod pack <folder> [--out <dir>]    build <id>-<version>.zip for a GitHub release\n  mod install <zip> [--data <dir>] [--replace]\n  mod list [--data <dir>]\n  mod index <owner/repo | URL>       read a mod index feed\n  mod releases <owner/repo> <id>     list a mod's installable GitHub releases"
         ),
     }
 }
@@ -108,7 +109,7 @@ fn run(args: &[String]) -> Result<()> {
             let dir = PathBuf::from(args.get(i + 1).context("--mod needs a folder")?);
             let manifest = dwrc_mods::ModManifest::load(&dir.join("mod.toml"))?;
             let problems = manifest.validate(&dir);
-            let info = dwrc_mods::ModInfo { root: dir.clone(), manifest, problems };
+            let info = dwrc_mods::ModInfo { root: dir.clone(), manifest, problems, source: dwrc_mods::ModSource::User };
             if !info.problems.is_empty() {
                 bail!("mod {} has problems: {:?}", dir.display(), info.problems);
             }
@@ -323,4 +324,104 @@ fn inspect(path: PathBuf) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn data_paths(args: &[String]) -> dwrc_runtime::Paths {
+    match opt(args, "--data") {
+        Some(d) => dwrc_runtime::Paths::at(d),
+        None => dwrc_runtime::Paths::detect(),
+    }
+}
+
+/// Mod authoring and management commands.
+fn mod_cmd(args: &[String]) -> Result<()> {
+    let arg = |i: usize, what: &str| args.get(i).cloned().with_context(|| format!("missing {what}"));
+    match args.first().map(String::as_str) {
+        Some("validate") => {
+            let dir = PathBuf::from(arg(1, "mod folder")?);
+            let m = dwrc_mods::ModManifest::load(&dir.join("mod.toml"))?;
+            let problems = m.validate(&dir);
+            let i = &m.info;
+            println!("{} ({}) v{} for {}", i.name, i.id, i.version, i.games().iter().map(|g| g.slug()).collect::<Vec<_>>().join(", "));
+            for n in m.notes() {
+                println!("  note: {n}");
+            }
+            for p in &problems {
+                println!("  ERROR: {p}");
+            }
+            if !problems.is_empty() {
+                bail!("{} problem(s)", problems.len());
+            }
+            println!("ok");
+            Ok(())
+        }
+        Some("pack") => {
+            let dir = PathBuf::from(arg(1, "mod folder")?);
+            let out = opt(args, "--out").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+            let zip = dwrc_mods::package::pack(&dir, &out)?;
+            println!("{}", zip.display());
+            Ok(())
+        }
+        Some("install") => {
+            let zip = PathBuf::from(arg(1, "zip file")?);
+            let paths = data_paths(args);
+            paths.ensure()?;
+            let opts = dwrc_mods::package::InstallOptions { expect_id: None, replace: flag(args, "--replace") };
+            let r = dwrc_mods::package::install_zip(&zip, &paths.user_mods_root(), &opts)?;
+            let mut cfg = dwrc_runtime::Config::load(&paths);
+            if r.replaced.is_none() {
+                cfg.mods.note_installed(&r.id, &r.manifest.info.games());
+            }
+            cfg.save(&paths)?;
+            match &r.replaced {
+                Some(old) => println!("{} v{} installed (replaced v{old}) in {}", r.name, r.version, r.dir.display()),
+                None => println!("{} v{} installed in {}", r.name, r.version, r.dir.display()),
+            }
+            Ok(())
+        }
+        Some("list") => {
+            let paths = data_paths(args);
+            let cfg = dwrc_runtime::Config::load(&paths);
+            let all = dwrc_runtime::installed_mods(&paths);
+            for id in cfg.mods.load_order(all.iter().map(|m| m.id())) {
+                let m = all.iter().find(|m| m.id() == id).unwrap();
+                let on: Vec<&str> = dwrc_disc::GameId::ALL.into_iter().filter(|g| cfg.mods.is_enabled(*g, m.id())).map(|g| g.slug()).collect();
+                println!(
+                    "{:<24} v{:<10} {:<8} on: {}{}",
+                    m.id(),
+                    m.version(),
+                    if m.source == dwrc_mods::ModSource::User { "user" } else { "bundled" },
+                    if on.is_empty() { "-".to_string() } else { on.join(",") },
+                    if m.problems.is_empty() { String::new() } else { format!("  ERRORS: {}", m.problems.join("; ")) }
+                );
+            }
+            Ok(())
+        }
+        Some("index") => {
+            let src = dwrc_modhub::index::resolve_source(&arg(1, "index")?).map_err(|e| anyhow::anyhow!(e))?;
+            let hub = dwrc_modhub::Hub::new(std::env::temp_dir().join("dwrc-cli-modhub"));
+            let f = hub.fetch_index(&src, true);
+            println!("feed: {}", src.feed);
+            if let Some(e) = &f.error {
+                println!("error: {e}");
+            }
+            for e in f.index.map(|i| i.mods).unwrap_or_default() {
+                println!("{:<24} v{:<10} {:<10} {}", e.id, e.display_version(), e.games.join(","), e.install_url().unwrap_or_else(|w| format!("({w})")));
+            }
+            Ok(())
+        }
+        Some("releases") => {
+            let repo = dwrc_mods::parse_github_repo(&arg(1, "owner/repo")?).context("not a GitHub repository")?;
+            let hub = dwrc_modhub::Hub::new(std::env::temp_dir().join("dwrc-cli-modhub"));
+            let f = hub.fetch_releases(&repo, &arg(2, "mod id")?, true);
+            if let Some(e) = &f.error {
+                println!("error: {e}");
+            }
+            for r in &f.releases {
+                println!("v{:<10} {:<11} {}{}", r.version, r.published.as_deref().unwrap_or(""), r.zip.name, if r.prerelease { "  (pre-release)" } else { "" });
+            }
+            Ok(())
+        }
+        _ => bail!("mod commands: validate, pack, install, list, index, releases"),
+    }
 }

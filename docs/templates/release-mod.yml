@@ -1,0 +1,42 @@
+# Publishes your mod as a GitHub Release whenever you push a version tag,
+# in the shape Re:Compiled's update checks and the mod index look for:
+# a release tagged v<version> with <id>-<version>.zip attached, the zip
+# holding an <id>/ folder.
+#
+# Use: put this file in your mod's repository as .github/workflows/release.yml
+# (mod.toml at the repository root), set `github = "you/your-mod"` in
+# mod.toml, bump `version`, then push a matching tag, e.g.
+#   git tag v1.2.0 && git push origin v1.2.0
+# (GitHub Desktop: History → right-click the commit → Create Tag, then Push.)
+# Files listed with `export-ignore` in .gitattributes are left out of the zip.
+name: Release mod
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pack <id>-<version>.zip
+        run: |
+          id=$(sed -n 's/^id *= *"\([^"]*\)".*/\1/p' mod.toml | head -1)
+          version=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' mod.toml | head -1)
+          if [ -z "$id" ] || [ -z "$version" ]; then echo "::error::mod.toml needs id and version"; exit 1; fi
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::mod.toml says version $version but the tag is $GITHUB_REF_NAME"; exit 1
+          fi
+          mkdir -p "dist/$id"
+          git archive HEAD | tar -x -C "dist/$id"
+          rm -rf "dist/$id/.github"
+          (cd dist && zip -qr -X "$id-$version.zip" "$id")
+          echo "ZIP=dist/$id-$version.zip" >> "$GITHUB_ENV"
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "$ZIP" --title "$GITHUB_REF_NAME" --generate-notes

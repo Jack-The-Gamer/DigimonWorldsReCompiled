@@ -36,9 +36,9 @@ Your discs are never copied or modified. Saves (memory cards), settings, screens
 | D-pad | Arrow keys | D-pad / left stick |
 | ✕ / ○ / □ / △ | X / C / Z / S | South / East / West / North |
 | Start / Select | Enter / Backspace | Start / Back |
-| L1 / R1 / L2 / R2 | Q / W / A / D | Bumpers / triggers |
+| L1 / R1 / L2 / R2 | Q / E / A / D | Bumpers / triggers |
 
-Keys can be rebound in **Settings → Controls**. While playing: **Esc** pause menu · **F10** mod manager · **F11** fullscreen · **F12** screenshot · hold **Tab** to fast-forward.
+Keys can be rebound in **Settings → Controls**. While playing: **Esc** pause menu · **F10** mods · **F11** fullscreen · **F12** screenshot · hold **Tab** to fast-forward.
 
 Memory cards are standard 128 KiB raw images (`card1.mcd`, `card2.mcd` in `saves/<game>/`), interchangeable with other emulators.
 
@@ -56,9 +56,15 @@ Other dumps of these releases are accepted with an "unverified" note. BIOS image
 
 ## Mods
 
-Mods live in folders with a `mod.toml`. They can replace files on the (virtual) disc, patch memory, and run Lua scripts with hooks on any code address, every frame and on controller input — with their own options and save data. Turn them on and configure them from the **Mods** button on a game's card or with **F10** in game.
+Mods work the way they do in Gen1Recomp. The launcher has a **Mods** page next to **Games** and **Settings**:
 
-Bundled examples: **Turbo Text** (hold R2 to race through dialogue), **Play Time Tracker**, and a documented **template**. See **[docs/modding.md](docs/modding.md)**.
+* **Installed** — every mod in one shared load order, switched on per game (DW1 / DW2 / DW3), with options, update checks, a version picker (update or roll back), uninstall and a safe mode.
+* **Find mods** — browse mod indexes hosted on GitHub and install with one click. The [Re:Compiled index](https://github.com/DigimonWorldsReCompiled/mod-index) is built in; add others with **Indexes…** (`owner/repo` or a link).
+* **Import .zip…** — install a mod you downloaded, or just drop the `.zip` on the window.
+
+Mods can replace files on the (virtual) disc, patch memory, and run Lua scripts with hooks on any code address, every frame and on controller input, with their own options and save data. Scripts run in a sandbox with no file, network or OS access. Authors publish versions as GitHub Releases, and players are offered updates automatically. **F10** in game switches the running game's mods on and off.
+
+Bundled examples: **Turbo Text** (hold R2 to race through dialogue), **Play Time Tracker**, and a documented **template**. See **[docs/modding.md](docs/modding.md)** for using, writing and publishing mods.
 
 ## How it works
 
@@ -78,7 +84,7 @@ Bundled examples: **Turbo Text** (hold R2 to race through dialogue), **Play Time
 
 * **`dwrc-psx`** models the console: the R3000A (with a reference interpreter that handles branch/load delay slots, exceptions, the instruction cache and multiply/divide/GTE stalls), the GTE, the GPU (software rasteriser following Mednafen's hardware-verified rules), the SPU (24 ADPCM voices, ADSR, reverb), the CD-ROM controller (command timing, XA-ADPCM streaming), MDEC (FMV decoding), DMA, timers, controllers and memory cards.
 * **`dwrc-recomp`** is the static recompiler. When execution reaches a code region, every block statically reachable from it is translated to native code with Cranelift and run against the same hardware model. Overlays loaded later are translated when reached, and translations are dropped automatically when the game overwrites their memory. A **validation mode** replays every translated block through the reference interpreter and compares registers, memory traffic and COP0/GTE state.
-* **`dwrc-mods`** implements the mod platform; **`dwrc-runtime`** the library, import/verification, settings and sessions; **`dwrc`** the launcher/player UI; **`dwrc-cli`** developer tools.
+* **`dwrc-mods`** implements the mod platform and **`dwrc-modhub`** the mod indexes and updates; **`dwrc-runtime`** the library, import/verification, settings and sessions; **`dwrc`** the launcher/player UI; **`dwrc-cli`** developer tools.
 
 Details: **[docs/architecture.md](docs/architecture.md)** · accuracy notes: **[docs/accuracy.md](docs/accuracy.md)** · tools: **[docs/dev-tools.md](docs/dev-tools.md)**.
 
@@ -105,11 +111,13 @@ crates/dwrc-disc      disc images, ISO9660, PS-X EXE, game identification
 crates/dwrc-mips      R3000A instruction decoding / disassembly
 crates/dwrc-psx       the PlayStation hardware model + reference interpreter
 crates/dwrc-recomp    static recompiler (Cranelift) + validation
-crates/dwrc-mods      mod platform (manifests, virtual disc files, patches, Lua)
+crates/dwrc-mods      mod platform (manifests, .zip install, virtual disc files, patches, Lua)
+crates/dwrc-modhub    mod indexes, GitHub release updates, downloads
 crates/dwrc-runtime   library, import, settings, sessions
 apps/dwrc             the launcher / player (egui)
 apps/dwrc-cli         developer command-line tools
 mods/                 bundled example mods
+mod-index/            the mod index (its own repository: DigimonWorldsReCompiled/mod-index)
 docs/                 documentation
 ```
 

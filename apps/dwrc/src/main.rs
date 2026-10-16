@@ -1,6 +1,6 @@
 //! Digimon Worlds Re:Compiled – one launcher for Digimon World 1, 2 and 3.
 //!
-//! Usage: `DigimonWorldsReCompiled [--play dw1|dw2|dw3]`
+//! Usage: `DigimonWorldsReCompiled [--play dw1|dw2|dw3] [mod.zip | disc.cue ...]`
 
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
@@ -8,6 +8,7 @@ mod app;
 mod audio;
 mod emu;
 mod input;
+mod mods_page;
 
 use eframe::egui;
 
@@ -39,11 +40,17 @@ fn icon() -> egui::IconData {
 fn main() -> eframe::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,wgpu=warn,naga=warn,eframe=warn")).init();
     let args: Vec<String> = std::env::args().collect();
-    let autostart = args
+    let play_at = args.iter().position(|a| a == "--play");
+    let autostart = play_at.and_then(|i| args.get(i + 1)).and_then(|s| dwrc_disc::GameId::from_slug(s));
+    // Files passed on the command line (or dropped on the program's icon):
+    // mod .zip files are installed, disc images imported.
+    let open_files: Vec<std::path::PathBuf> = args
         .iter()
-        .position(|a| a == "--play")
-        .and_then(|i| args.get(i + 1))
-        .and_then(|s| dwrc_disc::GameId::from_slug(s));
+        .enumerate()
+        .skip(1)
+        .filter(|(i, a)| !a.starts_with("--") && play_at.is_none_or(|p| *i != p + 1))
+        .map(|(_, a)| std::path::PathBuf::from(a))
+        .collect();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Digimon Worlds Re:Compiled")
@@ -53,5 +60,5 @@ fn main() -> eframe::Result<()> {
         vsync: true,
         ..Default::default()
     };
-    eframe::run_native("Digimon Worlds Re:Compiled", options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, autostart)))))
+    eframe::run_native("Digimon Worlds Re:Compiled", options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, autostart, open_files)))))
 }
