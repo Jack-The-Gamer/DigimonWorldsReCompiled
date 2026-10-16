@@ -3,7 +3,7 @@
 //!
 //! * **Installed** – every installed mod in one shared load order, switched
 //!   on per game, with options, update checks against each mod's GitHub
-//!   releases, a version picker (update or roll back), uninstall, safe mode.
+//!   releases, a version picker (update or roll back), delete, safe mode.
 //! * **Find mods** – browse mod indexes (the built-in Re:Compiled index
 //!   plus any the player adds) and install from them.
 //! * **Import .zip** – install a mod from a file (or drop it on the window).
@@ -27,6 +27,8 @@ use std::time::{Duration, Instant};
 
 /// An installed mod's card under the pointer (the card opens on a click).
 const CARD_HOVER: Color32 = Color32::from_rgb(35, 39, 48);
+/// Buttons that delete something.
+const DELETE_FILL: Color32 = Color32::from_rgb(160, 48, 48);
 
 pub fn game_short(g: GameId) -> &'static str {
     match g {
@@ -738,7 +740,7 @@ impl ModsUi {
                             }
                             if m.source == ModSource::User {
                                 ui.separator();
-                                if ui.button(RichText::new("Uninstall…").color(BAD)).clicked() {
+                                if ui.button(RichText::new("Delete…").color(BAD)).clicked() {
                                     acts.push(Act::AskUninstall(id.clone()));
                                     ui.close_menu();
                                 }
@@ -871,6 +873,19 @@ impl ModsUi {
             ui.label(RichText::new("Options").strong().color(BLUE));
             options_editor(ui, &info.id, &m.manifest.options, env.cfg.mods.options.get(&info.id), acts);
         }
+        ui.add_space(6.0);
+        // One row, the button at its right end.
+        ui.allocate_ui_with_layout(Vec2::new(ui.available_width(), 28.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let b = egui::Button::new(RichText::new("Delete").strong().color(Color32::WHITE)).fill(DELETE_FILL).min_size(Vec2::new(96.0, 28.0));
+            if m.source == ModSource::User {
+                let r = ui.add_enabled(self.op.is_none(), b).on_hover_text("Remove this mod from your mods folder (you'll be asked first)");
+                if r.clicked() {
+                    acts.push(Act::AskUninstall(info.id.clone()));
+                }
+            } else {
+                ui.add_enabled(false, b).on_disabled_hover_text("This mod comes with Re:Compiled, so it can't be deleted. Switch it off instead.");
+            }
+        });
     }
 
     // ------------------------------------------------------------------
@@ -1173,7 +1188,11 @@ impl ModsUi {
         if let Some(c) = &self.confirm {
             let mut answer: Option<bool> = None;
             let (title, body, yes): (&str, String, &str) = match c {
-                Confirm::Uninstall { name, .. } => ("Uninstall mod", format!("Remove {name} from your mods folder? Its saved data and option values are kept."), "Uninstall"),
+                Confirm::Uninstall { name, .. } => (
+                    "Delete mod",
+                    format!("Delete {name} from your mods folder? Its saved data and option values are kept, so they come back if you install it again."),
+                    "Delete",
+                ),
                 Confirm::Replace { info, .. } => {
                     let verb = match dwrc_mods::version::compare(&info.new_version, &info.installed_version) {
                         std::cmp::Ordering::Greater => "Update",
@@ -1193,7 +1212,11 @@ impl ModsUi {
                 ui.label(body);
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button(yes).clicked() {
+                    let b = match c {
+                        Confirm::Uninstall { .. } => egui::Button::new(RichText::new(yes).strong().color(Color32::WHITE)).fill(DELETE_FILL),
+                        _ => egui::Button::new(yes),
+                    };
+                    if ui.add(b).clicked() {
                         answer = Some(true);
                     }
                     if ui.button("Cancel").clicked() {
@@ -1213,10 +1236,13 @@ impl ModsUi {
                                 if env.running.is_some() {
                                     self.changed_while_running = true;
                                 }
-                                self.toasts.push((format!("{name} uninstalled."), false));
+                                if self.expanded.as_deref() == Some(id.as_str()) {
+                                    self.expanded = None;
+                                }
+                                self.toasts.push((format!("{name} deleted."), false));
                                 acts.push(Act::Dirty);
                             }
-                            Err(e) => self.toasts.push((format!("Could not uninstall {name}: {e:#}"), true)),
+                            Err(e) => self.toasts.push((format!("Could not delete {name}: {e:#}"), true)),
                         },
                         Confirm::Replace { zip, .. } => acts.push(Act::Install(Source::File(zip), true)),
                         Confirm::IndexInstall { entry, url, label, .. } => {

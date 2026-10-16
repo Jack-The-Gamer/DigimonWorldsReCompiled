@@ -12,7 +12,9 @@ Releases.
   switch per game (**DW1 / DW2 / DW3**) for the games it supports. Click
   anywhere on a mod's card for its details and options (click it again to
   close them); **More** has *Move to top/bottom*,
-  *Versions…*, *Open folder*, *Reset options* and *Uninstall…*.
+  *Versions…*, *Open folder*, *Reset options* and *Delete…*. An open card
+  also has a **Delete** button at the bottom. Deleting asks first, and keeps
+  the mod's saved data and option values for if you install it again.
 * **Find mods** browses the mod indexes: the built-in
   [Re:Compiled index](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index)
   plus any you add with **Indexes…** (paste `owner/repo`, the repository's
