@@ -11,10 +11,12 @@ Releases.
   when two mods change the same thing, the lower one wins). Each mod has a
   switch per game (**DW1 / DW2 / DW3**) for the games it supports. Click
   anywhere on a mod's card for its details and options (click it again to
-  close them); **More** has *Move to top/bottom*,
-  *Versions…*, *Open folder*, *Reset options* and *Delete…*. An open card
-  also has a **Delete** button at the bottom. Deleting asks first, and keeps
-  the mod's saved data and option values for if you install it again.
+  close them). **Reset options** above a mod's options puts them back to
+  their defaults. At the bottom of an open card, **Version History** lists
+  the mod's releases (update, or go back to an older one), **Open Folder**
+  shows its files, and **Delete** removes it after asking; its saved data
+  and option values are kept for if you install it again. **Up** and
+  **Down** change the load order.
 * **Find mods** browses the mod indexes: the built-in
   [Re:Compiled index](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index)
   plus any you add with **Indexes…** (paste `owner/repo`, the repository's
@@ -31,7 +33,7 @@ Releases.
   index, are checked with a single request. The **Mods** tab shows how many
   mods have an update, and each of those mods gets an **Update to vX**
   button (hover it for what's new). **Update all** installs every update;
-  **Versions…** installs any release, including older ones (roll back).
+  **Version History** installs any release, including older ones (roll back).
 * **Options → Safe mode** starts games with no mods at all, without losing
   your choices — useful when tracking down a problem.
 * In game, **F10** shows the running game's mods: switch them on or off and

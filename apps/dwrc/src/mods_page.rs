@@ -99,7 +99,6 @@ enum Confirm {
 enum Act {
     Toggle(String, GameId, bool),
     Move(String, i32),
-    Edge(String, bool),
     SetOption(String, String, toml::Value),
     ResetOptions(String),
     Expand(String),
@@ -717,35 +716,6 @@ impl ModsUi {
                         tag(ui, "EXPERIMENTAL", WARN);
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.menu_button("More", |ui| {
-                            if ui.button("Move to top").clicked() {
-                                acts.push(Act::Edge(id.clone(), true));
-                                ui.close_menu();
-                            }
-                            if ui.button("Move to bottom").clicked() {
-                                acts.push(Act::Edge(id.clone(), false));
-                                ui.close_menu();
-                            }
-                            if info.github_repo().is_some() && m.source == ModSource::User && ui.button("Versions…").clicked() {
-                                acts.push(Act::Versions(id.clone()));
-                                ui.close_menu();
-                            }
-                            if ui.button("Open folder").clicked() {
-                                acts.push(Act::OpenFolder(m.root.clone()));
-                                ui.close_menu();
-                            }
-                            if !m.manifest.options.is_empty() && ui.button("Reset options").clicked() {
-                                acts.push(Act::ResetOptions(id.clone()));
-                                ui.close_menu();
-                            }
-                            if m.source == ModSource::User {
-                                ui.separator();
-                                if ui.button(RichText::new("Delete…").color(BAD)).clicked() {
-                                    acts.push(Act::AskUninstall(id.clone()));
-                                    ui.close_menu();
-                                }
-                            }
-                        });
                         if ui.add_enabled(k + 1 < shown, egui::Button::new("Down")).clicked() {
                             acts.push(Act::Move(id.clone(), 1));
                         }
@@ -870,7 +840,14 @@ impl ModsUi {
         }
         if !m.manifest.options.is_empty() {
             ui.add_space(4.0);
-            ui.label(RichText::new("Options").strong().color(BLUE));
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Options").strong().color(BLUE));
+                let saved = env.cfg.mods.options.get(&info.id).is_some_and(|o| !o.is_empty());
+                let r = ui.add_enabled(saved, egui::Button::new("Reset options"));
+                if r.on_hover_text("Put every option back to its default").on_disabled_hover_text("Every option is at its default").clicked() {
+                    acts.push(Act::ResetOptions(info.id.clone()));
+                }
+            });
             options_editor(ui, &info.id, &m.manifest.options, env.cfg.mods.options.get(&info.id), acts);
         }
         ui.add_space(6.0);
@@ -884,6 +861,20 @@ impl ModsUi {
                 }
             } else {
                 ui.add_enabled(false, b).on_disabled_hover_text("This mod comes with Re:Compiled, so it can't be deleted. Switch it off instead.");
+            }
+            let size = Vec2::new(0.0, 28.0);
+            if ui.add(egui::Button::new("Open Folder").min_size(size)).on_hover_text(m.root.display().to_string()).clicked() {
+                acts.push(Act::OpenFolder(m.root.clone()));
+            }
+            let history = m.source == ModSource::User && info.github_repo().is_some();
+            let why = if m.source == ModSource::Bundled {
+                "This mod comes with Re:Compiled and is updated with it."
+            } else {
+                "This mod doesn't name a GitHub repository, so there are no versions to choose from."
+            };
+            let r = ui.add_enabled(history && self.op.is_none(), egui::Button::new("Version History").min_size(size));
+            if r.on_hover_text("Every release of this mod: update, or go back to an older version").on_disabled_hover_text(why).clicked() {
+                acts.push(Act::Versions(info.id.clone()));
             }
         });
     }
@@ -1106,7 +1097,7 @@ impl ModsUi {
             let m = self.mods.iter().find(|m| m.id() == id).cloned();
             let mut open = m.is_some();
             if let Some(m) = m {
-                egui::Window::new(format!("{} – versions", m.name())).open(&mut open).default_width(520.0).collapsible(false).pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.screen_rect().center()).show(ctx, |ui| {
+                egui::Window::new(format!("{} – version history", m.name())).open(&mut open).default_width(520.0).collapsible(false).pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.screen_rect().center()).show(ctx, |ui| {
                     ui.label(RichText::new(format!("Installed: v{}. Any release can be installed, including older ones.", m.version())).color(MUTED));
                     match self.releases.get(&id) {
                         Some(Remote::Ready(f)) => {
@@ -1285,10 +1276,6 @@ impl ModsUi {
                 }
                 Act::Move(id, d) => {
                     changed |= env.cfg.mods.move_within(&installed_refs, &vis, &id, d);
-                    touched_mods = true;
-                }
-                Act::Edge(id, top) => {
-                    changed |= env.cfg.mods.move_to_edge(&installed_refs, &vis, &id, top);
                     touched_mods = true;
                 }
                 Act::SetOption(id, opt, v) => {
