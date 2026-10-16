@@ -104,9 +104,10 @@ Dependencies are loaded before the mods that need them.
    `github = "you/your-mod"`.
 2. For each version, bump `version` and publish a **GitHub Release** tagged
    `v<version>` with **`<id>-<version>.zip`** attached (an `<id>/` folder with
-   the mod inside). `dwrc-cli mod pack <folder>` builds that file;
+   the mod inside). `dwrc-cli mod pack <folder>` builds that file, and
    [`templates/release-mod.yml`](templates/release-mod.yml) is a GitHub
-   Actions workflow that builds and publishes it whenever you push a tag.
+   Actions workflow that does all of it for you: bump `version` in
+   `mod.toml`, push (GitHub Desktop is fine), and the release appears.
 3. List it in the [mod index](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index)
    with a pull request adding `mods/<You>@<id>/meta.json` and
    `description.md`. The index follows your releases nightly, so new versions
