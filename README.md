@@ -16,7 +16,7 @@ Re:Compiled translates the games' own MIPS code (read from *your* discs) into na
 ## Playing
 
 1. **Get the program.** Download a release zip for your OS from [Releases](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled/releases), or build it yourself (see [Building](#building)). On Windows you can also double-click `Play-Windows.bat` in a source checkout: it builds whatever changed (if Rust is installed) and starts the program.
-2. **Point it at your discs.** On first launch, click **Scan a folder for discs…** and pick the folder holding your `.bin` images (`.cue` files are used if present but not needed). Each disc is identified and checked against known-good dumps (SHA-1). BIOS files in the folder are picked up too. You can also import discs and BIOS files individually, or drop them on the window.
+2. **Point it at your discs.** On first launch, click **Scan a folder for discs…** and pick the folder holding your `.bin` images (`.cue` files are used if present but not needed). Each disc is identified and checked against known-good dumps (SHA-1). BIOS files in the folder are picked up too. You can also import discs individually, add a BIOS in **Settings → BIOS**, or drop either on the window.
 3. **Press Play.**
 
 Your discs are never copied or modified. Saves (memory cards), settings, screenshots and generated data live in your user data folder:
@@ -56,7 +56,7 @@ Other dumps of these releases are accepted with an "unverified" note.
 
 ### BIOS (optional)
 
-Without a BIOS dump, games start with the built-in **OpenBIOS** (open source, MIT, by the PCSX-Redux authors). All three games boot, play and save with it, and a memory card it writes is byte-for-byte the same as one written through Sony's BIOS, so saves move freely between the two. The games' own code runs identically either way; adding a BIOS dumped from your console also makes the BIOS's own routines (boot sequence, kernel calls) exact, and enables **fast boot**. BIOS images verified: SCPH-5501 (USA, v3.0) and SCPH-5502/5552 (Europe, v3.0); other genuine BIOS dumps are accepted for their region. **Settings → Emulation → BIOS** chooses between them.
+Without a BIOS dump, games start with the built-in **OpenBIOS** (open source, MIT, by the PCSX-Redux authors). All three games boot, play and save with it, and a memory card it writes is byte-for-byte the same as one written through Sony's BIOS, so saves move freely between the two. The games' own code runs identically either way; adding a BIOS dumped from your console also makes the BIOS's own routines (boot sequence, kernel calls) exact, and enables **fast boot**. BIOS images verified: SCPH-5501 (USA, v3.0) and SCPH-5502/5552 (Europe, v3.0); other genuine BIOS dumps are accepted for their region. **Settings → BIOS** lists the BIOS files you have added (add or remove them there) and chooses between yours and the built-in one.
 
 ## Mods
 
@@ -71,7 +71,7 @@ Mods work the way they do in Gen1Recomp. The launcher has a **Mods** page next t
 
 Mods can replace files on the (virtual) disc, patch memory, and run Lua scripts with hooks on any code address, every frame and on controller input, with their own options and save data. Scripts run in a sandbox with no file, network or OS access. Authors publish versions as GitHub Releases, and players are offered updates automatically. **F10** in game switches the running game's mods on and off.
 
-Bundled examples: **Turbo Text** (hold R2 to race through dialogue), **Play Time Tracker**, and a documented **template**. See **[docs/modding.md](docs/modding.md)** for using, writing and publishing mods.
+Re:Compiled ships only a documented **template**; mods themselves come from the index, for example [**Turbo Text**](https://github.com/Jack-The-Gamer/dwrc-turbo-text) (hold R2 to race through dialogue). See **[docs/modding.md](docs/modding.md)** for using, writing and publishing mods.
 
 ## How it works
 
@@ -123,7 +123,7 @@ crates/dwrc-modhub    mod indexes, GitHub release updates, downloads
 crates/dwrc-runtime   library, import, settings, sessions
 apps/dwrc             the launcher / player (egui)
 apps/dwrc-cli         developer command-line tools
-mods/                 bundled example mods
+mods/                 the documented mod template
 assets/openbios/      the built-in BIOS (OpenBIOS, MIT) and how it is built
 docs/                 documentation
 ```

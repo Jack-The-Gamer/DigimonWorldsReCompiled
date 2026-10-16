@@ -275,42 +275,6 @@ impl App {
 
     fn library_screen(&mut self, ctx: &egui::Context) {
         self.top_bar(ctx);
-        egui::TopBottomPanel::bottom("bios")
-            .frame(egui::Frame::default().fill(PANEL_BG).inner_margin(egui::Margin::symmetric(18, 10)))
-            .show(ctx, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("BIOS").strong()).on_hover_text(
-                        "A BIOS dumped from your own console is optional. Without one, games start with the built-in \
-                         open-source BIOS (OpenBIOS). Your own BIOS makes the BIOS's own routines exact too.",
-                    );
-                    for region in [dwrc_disc::ident::Region::NtscU, dwrc_disc::ident::Region::Pal, dwrc_disc::ident::Region::NtscJ] {
-                        let (txt, col) = match self.lib.bios_choice(region, self.cfg.emulation.bios) {
-                            dwrc_runtime::library::BiosChoice::Console(b) => (
-                                format!("✔ {} – {}", region_label(region), b.info.known_name.clone().unwrap_or_else(|| b.info.version.clone())),
-                                OK,
-                            ),
-                            dwrc_runtime::library::BiosChoice::BuiltIn => (format!("{} – built-in", region_label(region)), MUTED),
-                        };
-                        ui.label(RichText::new(txt).color(col));
-                        ui.add_space(10.0);
-                    }
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button("Add BIOS…").clicked() && self.job.is_none() {
-                            if let Some(p) = rfd::FileDialog::new().set_title("Select your PlayStation BIOS dump").pick_file() {
-                                match self.lib.import_bios(&p) {
-                                    Ok(info) => {
-                                        let _ = self.lib.save(&self.paths);
-                                        let what = info.known_name.clone().unwrap_or(info.version.clone());
-                                        let note = if info.known_name.is_some() { "verified" } else { "not a verified dump, but usable" };
-                                        self.notify(format!("Added BIOS {what} ({}, {note}).", region_label(info.region)), false);
-                                    }
-                                    Err(e) => self.notify(e.to_string(), true),
-                                }
-                            }
-                        }
-                    });
-                });
-            });
         egui::CentralPanel::default().frame(egui::Frame::default().fill(Color32::from_rgb(13, 14, 18)).inner_margin(24.0)).show(ctx, |ui| {
             let none_imported = self.lib.games.is_empty();
             if none_imported {
@@ -320,7 +284,7 @@ impl App {
                     ui.label(
                         RichText::new(
                             "Re:Compiled runs your own disc images: the .bin is all it needs (a .cue is optional). \
-                             A BIOS dump is optional too. Nothing is copied or modified. Point it at the folder where you keep them:",
+                             A BIOS dump is optional too (Settings → BIOS). Nothing is copied or modified. Point it at the folder where you keep them:",
                         )
                         .color(MUTED),
                     );
@@ -485,28 +449,86 @@ impl App {
                         ui.label(RichText::new(format!("Audio unavailable: {e}")).color(BAD));
                     }
                 });
-                section(ui, "Emulation", |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("BIOS");
+                let mut add_bios = false;
+                let mut remove_bios: Option<usize> = None;
+                section(ui, "BIOS", |ui| {
+                    ui.label(
+                        RichText::new(
+                            "A BIOS dumped from your own console is optional. Without one, games start with the built-in OpenBIOS \
+                             (open source, MIT). Game code runs the same with either; your own BIOS also makes the BIOS's own routines \
+                             exact and allows fast boot. Saves work with both.",
+                        )
+                        .color(MUTED),
+                    );
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Use");
                         changed |= ui
                             .radio_value(&mut self.cfg.emulation.bios, BiosMode::Auto, "Your console's BIOS when added, otherwise built-in")
                             .changed();
-                        changed |= ui.radio_value(&mut self.cfg.emulation.bios, BiosMode::BuiltIn, "Always built-in").changed();
+                        changed |= ui.radio_value(&mut self.cfg.emulation.bios, BiosMode::BuiltIn, "Always the built-in BIOS").changed();
                     });
-                    ui.label(
-                        RichText::new(
-                            "The built-in BIOS is OpenBIOS (open source, MIT). Game code runs the same with either; a BIOS dumped from your \
-                             own console also makes the BIOS's own routines exact. Saves work with both.",
-                        )
-                        .color(MUTED)
-                        .small(),
-                    );
+                    ui.add_space(4.0);
+                    egui::Grid::new("bios-regions").num_columns(2).spacing([18.0, 4.0]).show(ui, |ui| {
+                        for region in [dwrc_disc::ident::Region::NtscU, dwrc_disc::ident::Region::Pal, dwrc_disc::ident::Region::NtscJ] {
+                            ui.label(region_label(region));
+                            match self.lib.bios_choice(region, self.cfg.emulation.bios) {
+                                dwrc_runtime::library::BiosChoice::Console(b) => {
+                                    let name = b.info.known_name.clone().unwrap_or_else(|| b.info.version.clone());
+                                    ui.label(RichText::new(format!("✔ {name}")).color(OK));
+                                }
+                                dwrc_runtime::library::BiosChoice::BuiltIn => {
+                                    ui.label(RichText::new("built-in OpenBIOS").color(MUTED));
+                                }
+                            }
+                            ui.end_row();
+                        }
+                    });
+                    if !self.lib.bios.is_empty() {
+                        ui.add_space(6.0);
+                        ui.label(RichText::new("Your BIOS files").strong());
+                        for (i, b) in self.lib.bios.iter().enumerate() {
+                            ui.horizontal_wrapped(|ui| {
+                                let name = b.info.known_name.clone().unwrap_or_else(|| b.info.version.clone());
+                                ui.label(RichText::new(name).strong());
+                                ui.label(RichText::new(region_label(b.info.region)).color(MUTED));
+                                if b.info.known_name.is_some() {
+                                    ui.label(RichText::new("✔ verified dump").color(OK));
+                                } else {
+                                    ui.label(RichText::new("unverified dump").color(WARN));
+                                }
+                                if !b.path.exists() {
+                                    ui.label(RichText::new("✖ file missing").color(BAD));
+                                }
+                                if ui.button("Remove").on_hover_text("Stop using this BIOS. The file itself is not deleted.").clicked() {
+                                    remove_bios = Some(i);
+                                }
+                            });
+                            ui.label(RichText::new(b.path.display().to_string()).color(MUTED).small());
+                        }
+                    }
+                    ui.add_space(4.0);
+                    if ui.button("Add BIOS…").clicked() {
+                        add_bios = true;
+                    }
                     changed |= ui
                         .checkbox(
                             &mut self.cfg.emulation.fast_boot,
-                            "Fast boot (skip the PlayStation logo with your own BIOS; the built-in BIOS always boots straight into the game)",
+                            "Fast boot (skip the PlayStation logo; with your own BIOS only, the built-in one boots straight into the game)",
                         )
                         .changed();
+                });
+                if add_bios && self.job.is_none() {
+                    if let Some(p) = rfd::FileDialog::new().set_title("Select your PlayStation BIOS dump").pick_file() {
+                        self.add_bios(p);
+                    }
+                }
+                if let Some(i) = remove_bios {
+                    let b = self.lib.bios.remove(i);
+                    let _ = self.lib.save(&self.paths);
+                    let name = b.info.known_name.unwrap_or(b.info.version);
+                    self.notify(format!("Removed BIOS {name} from the list (the file was not deleted)."), false);
+                }
+                section(ui, "Emulation", |ui| {
                     changed |= ui.checkbox(&mut self.cfg.emulation.memory_card_2, "Insert a memory card in slot 2").changed();
                     ui.horizontal(|ui| {
                         ui.label("CPU engine");
@@ -800,8 +822,26 @@ impl App {
         }
     }
 
+    fn add_bios(&mut self, path: std::path::PathBuf) {
+        match self.lib.import_bios(&path) {
+            Ok(info) => {
+                let _ = self.lib.save(&self.paths);
+                let what = info.known_name.clone().unwrap_or(info.version.clone());
+                let note = if info.known_name.is_some() { "verified" } else { "not a verified dump, but usable" };
+                self.notify(format!("Added BIOS {what} ({}, {note}).", region_label(info.region)), false);
+            }
+            Err(e) => self.notify(e.to_string(), true),
+        }
+    }
+
     fn open_file(&mut self, ctx: &egui::Context, path: std::path::PathBuf) {
         let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        let bios_sized = std::fs::metadata(&path).map(|m| m.len() == dwrc_runtime::bios::BIOS_SIZE as u64).unwrap_or(false);
+        if bios_sized && matches!(ext.as_str(), "bin" | "rom" | "") {
+            self.screen = Screen::Settings;
+            self.add_bios(path);
+            return;
+        }
         match ext.as_str() {
             "zip" => {
                 self.screen = Screen::Mods;
@@ -812,7 +852,7 @@ impl App {
                 self.screen = Screen::Library;
                 self.start_import_disc(path);
             }
-            _ => self.notify(format!("{} is not a mod (.zip) or a disc image (.cue/.bin).", path.display()), true),
+            _ => self.notify(format!("{} is not a mod (.zip), a disc image (.bin/.cue) or a BIOS dump.", path.display()), true),
         }
     }
 
@@ -822,7 +862,7 @@ impl App {
             let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("drop")));
             p.rect_filled(screen, 0.0, Color32::from_black_alpha(190));
             p.rect_stroke(screen.shrink(18.0), 12.0, Stroke::new(3.0_f32, ACCENT), egui::StrokeKind::Inside);
-            p.text(screen.center(), Align2::CENTER_CENTER, "Drop a mod .zip to install it\nor a disc image (.cue) to import it", egui::FontId::proportional(24.0), Color32::WHITE);
+            p.text(screen.center(), Align2::CENTER_CENTER, "Drop a mod .zip to install it,\na disc image (.bin/.cue) to import it,\nor a BIOS dump to add it", egui::FontId::proportional(24.0), Color32::WHITE);
             ctx.request_repaint();
         }
         if let Some(job) = &self.job {

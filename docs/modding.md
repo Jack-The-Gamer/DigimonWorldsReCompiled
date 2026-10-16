@@ -176,7 +176,9 @@ dwrc.on_exec(0x80045678, function(ctx)
 end)
 ```
 
-### Example: Turbo Text (bundled)
+### Example: Turbo Text
+
+The full mod, with options and its release workflow, is [Jack-The-Gamer/dwrc-turbo-text](https://github.com/Jack-The-Gamer/dwrc-turbo-text); this is its core:
 
 ```lua
 local hold, tap = dwrc.buttons[dwrc.options.hold], dwrc.buttons.Cross
