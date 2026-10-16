@@ -10,7 +10,8 @@ _dev_staging/
 portable.txt
 /data/
 
-# The mod index is its own repository (published as Jack-The-Gamer/DigimonWorldsReCompiled-mod-index).
+# The mod index is its own repository (Jack-The-Gamer/DigimonWorldsReCompiled-mod-index);
+# ignored in case a copy is ever kept inside this folder.
 /mod-index/
 
 # The built-in open-source BIOS (MIT) is part of the program.
