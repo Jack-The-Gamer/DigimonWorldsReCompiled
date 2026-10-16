@@ -37,12 +37,17 @@ pub struct Updater {
     install: Option<Install>,
     checking: Option<Receiver<AppCheck>>,
     check: Option<AppCheck>,
+    /// The player's "check when the launcher starts" setting; also re-checks
+    /// every few hours while the launcher stays open.
+    auto: bool,
+    /// When GitHub was last asked.
+    last_asked: Option<std::time::Instant>,
     window: bool,
     task: Task,
 }
 
 impl Updater {
-    /// Starts the check when `check_now` (the player's setting).
+    /// Asks GitHub straight away when `check_now` (the player's setting).
     pub fn new(paths: &Paths, check_now: bool) -> Self {
         let install = Install::detect();
         if let Some(Install::Release { dir }) = &install {
@@ -64,11 +69,15 @@ impl Updater {
             install,
             checking: None,
             check: None,
+            auto: check_now,
+            last_asked: None,
             window: false,
             task: Task::Idle,
         };
         if check_now {
-            u.check(false);
+            // Always ask GitHub on start-up: a cached answer could predate a
+            // release made since (the cache is only the offline fallback).
+            u.check(true);
         }
         u
     }
@@ -77,6 +86,9 @@ impl Updater {
     pub fn check(&mut self, force: bool) {
         if self.checking.is_some() {
             return;
+        }
+        if force {
+            self.last_asked = Some(std::time::Instant::now());
         }
         let hub = self.hub.clone();
         let (tx, rx) = channel();
@@ -87,6 +99,10 @@ impl Updater {
     }
 
     pub fn poll(&mut self, ctx: &egui::Context) {
+        let due = self.last_asked.is_some_and(|t| t.elapsed() >= Duration::from_secs(app_update::APP_TTL));
+        if self.auto && due && matches!(self.task, Task::Idle) {
+            self.check(true);
+        }
         if let Some(rx) = &self.checking {
             match rx.try_recv() {
                 Ok(c) => {
@@ -282,6 +298,10 @@ impl Updater {
     pub fn settings(&mut self, ui: &mut egui::Ui, check_on_start: &mut bool) -> bool {
         ui.label(RichText::new(format!("Digimon Worlds Re:Compiled v{RUNNING}")).strong());
         let changed = ui.checkbox(check_on_start, "Check for a new version when the launcher starts").changed();
+        self.auto = *check_on_start;
+        if changed && self.auto && self.last_asked.is_none() {
+            self.check(true);
+        }
         ui.horizontal_wrapped(|ui| {
             if ui.add_enabled(self.checking.is_none(), egui::Button::new("Check now")).clicked() {
                 self.check(true);

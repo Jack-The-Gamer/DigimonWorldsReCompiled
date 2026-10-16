@@ -3,7 +3,8 @@
 //! **Checking.** The launcher reads the project's latest GitHub release
 //! (`GET /repos/<repo>/releases/latest`, which never returns drafts or
 //! pre-releases) and offers it when its version is newer than the running
-//! build. The answer is cached for six hours, like a mod's release list.
+//! build. It asks on every start and every six hours while it stays open;
+//! the last answer is kept on disk for when GitHub cannot be reached.
 //!
 //! **Installing** (a copy unzipped from a release): the zip CI built for this
 //! platform is downloaded and unpacked into a staging folder beside the
@@ -33,7 +34,8 @@ use std::path::{Component, Path, PathBuf};
 
 /// Where Re:Compiled is released.
 pub const APP_REPO: &str = "Jack-The-Gamer/DigimonWorldsReCompiled";
-/// How long a checked latest release is trusted.
+/// How long a checked latest release is trusted (and how often a launcher
+/// left open asks again).
 pub const APP_TTL: u64 = 6 * 60 * 60;
 /// The running version.
 pub const RUNNING: &str = env!("CARGO_PKG_VERSION");
