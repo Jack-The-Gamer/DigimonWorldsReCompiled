@@ -12,3 +12,6 @@ portable.txt
 
 # The mod index is its own repository (published as Jack-The-Gamer/DigimonWorldsReCompiled-mod-index).
 /mod-index/
+
+# The built-in open-source BIOS (MIT) is part of the program.
+!assets/openbios/openbios.bin

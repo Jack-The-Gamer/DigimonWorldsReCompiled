@@ -69,11 +69,25 @@ impl Default for AudioConfig {
     }
 }
 
+/// Which BIOS a game starts with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum BiosMode {
+    /// The player's own BIOS for the game's region when one has been added
+    /// (most exact), otherwise the built-in one.
+    #[default]
+    Auto,
+    /// Always the built-in BIOS.
+    BuiltIn,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EmulationConfig {
     /// Skip the BIOS boot animation (the kernel still initialises normally).
+    /// Only applies to a console BIOS; the built-in one boots directly.
     pub fast_boot: bool,
+    pub bios: BiosMode,
     pub engine: EngineKind,
     /// Insert a second memory card in slot 2.
     pub memory_card_2: bool,
@@ -81,7 +95,7 @@ pub struct EmulationConfig {
 
 impl Default for EmulationConfig {
     fn default() -> Self {
-        Self { fast_boot: true, engine: EngineKind::Recompiled, memory_card_2: true }
+        Self { fast_boot: true, bios: BiosMode::Auto, engine: EngineKind::Recompiled, memory_card_2: true }
     }
 }
 

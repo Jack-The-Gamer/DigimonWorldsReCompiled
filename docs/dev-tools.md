@@ -8,7 +8,7 @@ Build with `cargo build --release -p dwrc-cli`; the tool is `target/release/dwrc
 | `dwrc-cli extract <cue> <path> <out>` | Extract a file from the disc's filesystem. |
 | `dwrc-cli disasm <exe> <hex-addr> <count>` | Disassemble a PS-X EXE. |
 | `dwrc-cli import <data-root> <folder>` | Scan a folder into a library (same code as the launcher). |
-| `dwrc-cli run <cue> --bios <bin> [options]` | Run a game headlessly. |
+| `dwrc-cli run <bin or cue> [--bios <bin>] [options]` | Run a game headlessly (built-in OpenBIOS unless `--bios` is given). |
 | `dwrc-cli mod validate <folder>` | Check a mod folder (manifest, files, versions, dependencies). |
 | `dwrc-cli mod pack <folder> [--out DIR]` | Build `<id>-<version>.zip`, the asset a GitHub release should carry. |
 | `dwrc-cli mod install <zip> [--data DIR] [--replace]` | Install a mod `.zip` (same code as the launcher). |
@@ -21,13 +21,15 @@ Build with `cargo build --release -p dwrc-cli`; the tool is `target/release/dwrc
 | | |
 |---|---|
 | `--frames N` | frames to run (default 600) |
-| `--fast` | fast boot |
+| `--fast` | fast boot (with `--bios` only) |
 | `--engine interp\|recomp\|validate` | CPU engine (default interp) |
 | `--shots DIR --every K` | save a PNG every K frames, plus `vram.png` at the end |
 | `--wav FILE` | record audio |
 | `--input "frame:button:len,..."` | scripted input, e.g. `1000:start:10,1200:x:6` (buttons: start select x o t s up down left right l1 r1 l2 r2) |
 | `--mod DIR` | enable a mod folder (repeatable) |
 | `--tty` | echo the BIOS/game debug console |
+| `--card1 FILE.mcd` / `--card2` | use (and afterwards save) memory card images |
+| `--trace-bios` | list the BIOS functions the game calls (table, number, count, first frame) |
 | `--dump-entry` | print the hardware state when the game's entry point is reached |
 | `--pcs` | sample where the CPU spends its time at the end of the run |
 

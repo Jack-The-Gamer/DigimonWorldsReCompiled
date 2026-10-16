@@ -2,21 +2,21 @@
 
 **Digimon World, Digimon World 2 and Digimon World 3 / 2003, running natively on Windows, Linux and macOS — exactly as they ran on the original PlayStation — from one launcher, with mod support.**
 
-Re:Compiled translates the games' own MIPS code (read from *your* discs) into native machine code and runs it against a cycle-timed model of the PlayStation hardware written in Rust. Nothing from the games is included in this repository or in its releases: you supply your own disc images and console BIOS, Re:Compiled verifies them, and everything else is generated on your machine.
+Re:Compiled translates the games' own MIPS code (read from *your* discs) into native machine code and runs it against a cycle-timed model of the PlayStation hardware written in Rust. Nothing from the games is included in this repository or in its releases: you supply your own disc images, Re:Compiled verifies them, and everything else is generated on your machine. A BIOS dump from your console is optional; without one, the built-in open-source [OpenBIOS](assets/openbios/README.md) starts the games.
 
 | | |
 |---|---|
 | Games | Digimon World (USA), Digimon World 2 (USA), Digimon World 2003 (Europe), Digimon World 3 (USA, unverified) |
 | Platforms | Windows 10/11, Linux (X11/Wayland), macOS 11+ (Intel and Apple Silicon) |
-| Language | 100% Rust (plus Lua 5.4 for mod scripts) |
-| You provide | Disc images (`.cue` + `.bin`) and a PlayStation BIOS dump for the disc's region |
+| Language | Rust (plus Lua 5.4 for mod scripts; the optional built-in BIOS is OpenBIOS, MIT-licensed C) |
+| You provide | Your disc images (the `.bin`; a `.cue` is optional). A BIOS dump is optional |
 
 ---
 
 ## Playing
 
 1. **Get the program.** Download a release zip for your OS from [Releases](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled/releases), or build it yourself (see [Building](#building)). On Windows you can also double-click `Play-Windows.bat` in a source checkout: it builds whatever changed (if Rust is installed) and starts the program.
-2. **Point it at your files.** On first launch, click **Scan a folder for discs & BIOS…** and pick the folder holding your `.cue`/`.bin` images and BIOS file. Each disc is identified and checked against known-good dumps (SHA-1). You can also import discs and BIOS files individually.
+2. **Point it at your discs.** On first launch, click **Scan a folder for discs…** and pick the folder holding your `.bin` images (`.cue` files are used if present but not needed). Each disc is identified and checked against known-good dumps (SHA-1). BIOS files in the folder are picked up too. You can also import discs and BIOS files individually, or drop them on the window.
 3. **Press Play.**
 
 Your discs are never copied or modified. Saves (memory cards), settings, screenshots and generated data live in your user data folder:
@@ -52,7 +52,11 @@ These images are verified end-to-end (full-image SHA-1):
 | Digimon World 2 (USA) | SLUS-01193 | `Digimon World 2 (USA).bin` | `d9cb009bc0006e901d8ab1365f764ab71da02115` |
 | Digimon World 2003 (Europe) | SLES-03936 | `Digimon World 2003 (Europe) (En,Fr,De,Es,It).bin` | `457cb233349ba841e03b33d8060f8fbcadd45cb3` |
 
-Other dumps of these releases are accepted with an "unverified" note. BIOS images verified: SCPH-5501 (USA, v3.0) and SCPH-5502/5552 (Europe, v3.0); other genuine BIOS dumps are accepted for their region.
+Other dumps of these releases are accepted with an "unverified" note.
+
+### BIOS (optional)
+
+Without a BIOS dump, games start with the built-in **OpenBIOS** (open source, MIT, by the PCSX-Redux authors). All three games boot, play and save with it, and a memory card it writes is byte-for-byte the same as one written through Sony's BIOS, so saves move freely between the two. The games' own code runs identically either way; adding a BIOS dumped from your console also makes the BIOS's own routines (boot sequence, kernel calls) exact, and enables **fast boot**. BIOS images verified: SCPH-5501 (USA, v3.0) and SCPH-5502/5552 (Europe, v3.0); other genuine BIOS dumps are accepted for their region. **Settings → Emulation → BIOS** chooses between them.
 
 ## Mods
 
@@ -123,6 +127,6 @@ docs/                 documentation
 
 ## Legal
 
-Digimon is a trademark of Bandai Namco / Toei Animation. PlayStation is a trademark of Sony Interactive Entertainment. This project is not affiliated with or endorsed by either. It contains no game or BIOS data; use it only with discs and a BIOS you own.
+Digimon is a trademark of Bandai Namco / Toei Animation. PlayStation is a trademark of Sony Interactive Entertainment. This project is not affiliated with or endorsed by either. It contains no game data and no Sony BIOS; use it only with discs (and, optionally, a BIOS) you own.
 
 Re:Compiled's own code is dual-licensed under MIT or Apache-2.0, at your option.

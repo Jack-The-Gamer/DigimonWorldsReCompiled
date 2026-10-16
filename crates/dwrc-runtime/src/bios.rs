@@ -6,6 +6,15 @@ use sha1::{Digest, Sha1};
 
 pub const BIOS_SIZE: usize = 512 * 1024;
 
+/// The built-in BIOS, used when the player has not added their own:
+/// OpenBIOS by the PCSX-Redux authors (MIT licence, no Sony code), built
+/// without its menu shell so it boots the disc directly. See
+/// `assets/openbios/README.md`.
+pub static BUILTIN_BIOS: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/openbios/openbios.bin"));
+
+/// How the built-in BIOS is named in the interface.
+pub const BUILTIN_NAME: &str = "built-in OpenBIOS";
+
 /// BIOS dumps verified with Re:Compiled.
 const KNOWN: &[(&str, &str, Region)] = &[
     ("0555c6fae8906f3f09baf5988f00e55f88e9f30b", "SCPH-5501 v3.0 (USA)", Region::NtscU),
@@ -58,5 +67,18 @@ pub fn region_label(r: Region) -> &'static str {
         Region::NtscU => "NTSC-U (America)",
         Region::Pal => "PAL (Europe)",
         Region::NtscJ => "NTSC-J (Japan)",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_bios_is_present() {
+        assert_eq!(BUILTIN_BIOS.len(), BIOS_SIZE);
+        assert!(String::from_utf8_lossy(BUILTIN_BIOS).contains("OpenBios"));
+        // It is not mistaken for a Sony BIOS.
+        assert!(identify_bios(BUILTIN_BIOS).is_none());
     }
 }

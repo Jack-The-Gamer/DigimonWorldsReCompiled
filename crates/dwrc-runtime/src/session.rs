@@ -2,7 +2,7 @@
 //! memory cards, mods and execution engine.
 
 use crate::config::{Config, EngineKind};
-use crate::library::{DiscStatus, Library};
+use crate::library::{BiosChoice, DiscStatus, Library};
 use crate::paths::Paths;
 use anyhow::{anyhow, bail, Context, Result};
 use dwrc_disc::ident::Region;
@@ -28,6 +28,8 @@ pub struct Session {
     pub last_frame_time: Duration,
     pub frame: u64,
     pub engine: EngineKind,
+    /// The BIOS this session runs (a console dump or the built-in one).
+    pub bios_name: String,
 }
 
 /// Information shown before starting (so the UI can explain problems).
@@ -37,10 +39,6 @@ pub fn preflight(lib: &Library, game: GameId) -> Result<()> {
         DiscStatus::Missing => bail!("The disc image for {} was moved or deleted. Import it again.", game.title()),
         DiscStatus::Changed => bail!("The disc image for {} changed since it was verified. Import it again.", game.title()),
         DiscStatus::Ready => {}
-    }
-    let region = lib.games[&game].ident.region;
-    if lib.bios_for(region).is_none() {
-        bail!("No {} BIOS has been added. Add your console's BIOS dump.", crate::bios::region_label(region));
     }
     Ok(())
 }
@@ -61,8 +59,12 @@ impl Session {
         preflight(lib, game)?;
         let entry = &lib.games[&game];
         let ident = entry.ident.clone();
-        let bios_entry = lib.bios_for(ident.region).ok_or_else(|| anyhow!("no BIOS"))?;
-        let bios = std::fs::read(&bios_entry.path).with_context(|| format!("reading {}", bios_entry.path.display()))?;
+        let choice = lib.bios_choice(ident.region, cfg.emulation.bios);
+        let bios_name = choice.label();
+        let (bios, console_bios) = match choice {
+            BiosChoice::Console(b) => (std::fs::read(&b.path).with_context(|| format!("reading {}", b.path.display()))?, true),
+            BiosChoice::BuiltIn => (crate::bios::BUILTIN_BIOS.to_vec(), false),
+        };
 
         let mut disc = Disc::open(&entry.disc_path)?;
 
@@ -96,7 +98,9 @@ impl Session {
         psx.bus.sio.cards[1] = if cfg.emulation.memory_card_2 { Some(load_card(&c2)) } else { None };
         let card_paths = [Some(c1), if cfg.emulation.memory_card_2 { Some(c2) } else { None }];
 
-        if cfg.emulation.fast_boot {
+        // Fast boot skips the Sony BIOS's logo; the built-in BIOS boots the
+        // disc directly anyway.
+        if cfg.emulation.fast_boot && console_bios {
             psx.enable_fast_boot(exe.clone());
         }
         let engine = cfg.emulation.engine;
@@ -106,7 +110,7 @@ impl Session {
             EngineKind::Validate => psx.set_engine(dwrc_recomp::new_engine(dwrc_recomp::Mode::Validate)),
         }
         mod_rt.install(&mut psx);
-        log::info!("starting {} ({}) with the {} engine", ident.title, ident.serial, psx.engine_name());
+        log::info!("starting {} ({}) with the {} engine and the {bios_name} BIOS", ident.title, ident.serial, psx.engine_name());
         Ok(Self {
             game,
             ident,
@@ -119,6 +123,7 @@ impl Session {
             last_frame_time: Duration::from_millis(16),
             frame: 0,
             engine,
+            bios_name,
         })
     }
 

@@ -92,6 +92,6 @@ The hook mechanism (`Bus::add_hook`) already lets Rust code or Lua scripts take 
 
 ## The runtime and launcher
 
-`Library` stores where the player's discs and BIOS are, their identification and the full-image SHA-1 (checked once at import; later launches only check size and mtime). A `Session` builds the virtual disc (with mod overlays), the console, memory cards and the chosen engine, and applies fast boot if enabled. Fast boot side-loads the executable when the BIOS reaches its shell entry point, after the kernel has initialised, and leaves the CD-ROM controller as the shell would.
+`Library` stores where the player's discs and BIOS are, their identification and the full-image SHA-1 (checked once at import; later launches only check size and mtime). A `Session` builds the virtual disc (with mod overlays), the console, memory cards and the chosen engine, picks the BIOS (the player's dump for the disc's region, otherwise the built-in OpenBIOS from `assets/openbios/`), and applies fast boot if enabled (console BIOS only; OpenBIOS is built to boot the disc directly). Fast boot side-loads the executable when the BIOS reaches its shell entry point, after the kernel has initialised, and leaves the CD-ROM controller as the shell would.
 
 The player runs the session on its own thread, paced by the console's own frame timing (NTSC ≈59.8 Hz, PAL ≈49.8 Hz). Audio goes through a ring buffer with gentle drift correction to the device rate. The UI shows the latest frame scaled to 4:3 (or integer/stretch).

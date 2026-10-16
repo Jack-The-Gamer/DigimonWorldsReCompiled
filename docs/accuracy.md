@@ -5,6 +5,7 @@
 ## Verified against the games
 
 * All three supported releases boot through the real BIOS (or fast boot), play their FMVs (MDEC + XA audio) and reach gameplay with scripted input; memory cards are detected, written and read.
+* They also boot, play and save on the built-in OpenBIOS. Digimon World's new-game save written through OpenBIOS is byte-identical (all 1024 card frames) to the one written through SCPH-5501.
 * The recompiler matches the reference interpreter: zero mismatches across ≈224,000 validated block executions (≈30,000 distinct blocks), and pixel-identical frames between engines over minutes of play.
 * A full BIOS boot needed one fix: on a DICR write, interrupt flags of channels whose enable bit is written as 0 are cleared (Mednafen behaviour). Without it, DMA completion flags left by the BIOS shell raise a spurious interrupt in Digimon World's FMV streaming code.
 
@@ -23,9 +24,10 @@ These follow the nocash PSX specification and Mednafen's hardware-tested behavio
 | GPU drawing time | Drawing completes instantly (no GPU busy time) | Games are never GPU-bound here, so scenes that slowed down on hardware because of fill rate may run slightly smoother. |
 | CD-ROM seek time | Distance-based model (Mednafen formula) | Loading pauses are close to hardware but not identical. |
 | Interrupt latency (recompiled engine) | Interrupts are taken between translated blocks (at most one block — up to 96 instructions — later than hardware) | No observable effect in testing (frames identical to the interpreter). |
+| Built-in BIOS (when you have not added your own) | OpenBIOS: an independent implementation of the BIOS kernel and boot loader | Game code is unaffected, but BIOS routines (boot, kernel calls, memory card and CD-ROM library functions) take different amounts of time than Sony's, so timing-sensitive moments can differ slightly. Add a console BIOS for exactness. |
 | Controllers | Digital pad (SCPH-1080) | Correct for DW1/DW2/DW2003 (they need no analog input). DualShock vibration is not emulated yet. |
 
 ## How to check accuracy yourself
 
 * Run any game with **Settings → CPU engine → Validate** to check every translated block against the interpreter while you play (slow).
-* `dwrc-cli run <cue> --bios <bin> --engine interp|recomp --frames N --shots dir --every K` produces comparable screenshots from either engine.
+* `dwrc-cli run <bin> [--bios <bin>] --engine interp|recomp --frames N --shots dir --every K` produces comparable screenshots from either engine.

@@ -37,6 +37,24 @@ pub struct Library {
     pub bios: Vec<BiosEntry>,
 }
 
+/// Which BIOS a session uses.
+#[derive(Debug, Clone, Copy)]
+pub enum BiosChoice<'a> {
+    /// A BIOS dumped from the player's console.
+    Console(&'a BiosEntry),
+    /// The built-in OpenBIOS.
+    BuiltIn,
+}
+
+impl BiosChoice<'_> {
+    pub fn label(&self) -> String {
+        match self {
+            BiosChoice::Console(b) => b.info.known_name.clone().unwrap_or_else(|| b.info.version.clone()),
+            BiosChoice::BuiltIn => crate::bios::BUILTIN_NAME.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiscStatus {
     NotImported,
@@ -130,6 +148,14 @@ impl Library {
         self.bios.retain(|b| b.info.sha1 != info.sha1);
         self.bios.push(BiosEntry { path: path.to_path_buf(), info: info.clone() });
         Ok(info)
+    }
+
+    /// The BIOS a game of `region` starts with under `mode`.
+    pub fn bios_choice(&self, region: Region, mode: crate::config::BiosMode) -> BiosChoice<'_> {
+        match (mode, self.bios_for(region)) {
+            (crate::config::BiosMode::Auto, Some(b)) => BiosChoice::Console(b),
+            _ => BiosChoice::BuiltIn,
+        }
     }
 
     /// Picks the best BIOS for a disc region: a verified one of the same

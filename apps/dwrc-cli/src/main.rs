@@ -35,7 +35,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         _ => bail!(
-            "commands:\n  inspect <cue>\n  extract <cue> <path> <out>\n  run <cue> --bios <bin> [--frames N] [--shots dir] [--every K] [--fast] [--input frame:button:len,...] [--mod <folder>]...\n  disasm <exe> <addr> <count>\n  mod validate <folder>              check a mod folder\n  mod pack <folder> [--out <dir>]    build <id>-<version>.zip for a GitHub release\n  mod install <zip> [--data <dir>] [--replace]\n  mod list [--data <dir>]\n  mod index <owner/repo | URL>       read a mod index feed\n  mod releases <owner/repo> <id>     list a mod's installable GitHub releases"
+            "commands:\n  inspect <cue>\n  extract <cue> <path> <out>\n  run <bin|cue> [--bios <bin>] [--frames N] [--shots dir] [--every K] [--fast] [--input frame:button:len,...] [--mod <folder>]... [--card1 F.mcd] [--trace-bios]\n  disasm <exe> <addr> <count>\n  mod validate <folder>              check a mod folder\n  mod pack <folder> [--out <dir>]    build <id>-<version>.zip for a GitHub release\n  mod install <zip> [--data <dir>] [--replace]\n  mod list [--data <dir>]\n  mod index <owner/repo | URL>       read a mod index feed\n  mod releases <owner/repo> <id>     list a mod's installable GitHub releases"
         ),
     }
 }
@@ -71,11 +71,12 @@ fn parse_button(s: &str) -> Option<Button> {
 
 fn run(args: &[String]) -> Result<()> {
     let cue = PathBuf::from(args.first().context("missing cue")?);
-    let bios_path = opt(args, "--bios").context("--bios required")?;
+    // Without --bios the built-in OpenBIOS is used (fast boot does not apply).
+    let bios_path = opt(args, "--bios");
     let frames: u64 = opt(args, "--frames").unwrap_or("600").parse()?;
     let every: u64 = opt(args, "--every").unwrap_or("60").parse()?;
     let shots = opt(args, "--shots").map(PathBuf::from);
-    let fast = flag(args, "--fast");
+    let fast = flag(args, "--fast") && bios_path.is_some();
     let wav = opt(args, "--wav").map(PathBuf::from);
     let mut all_audio: Vec<i16> = Vec::new();
     let tty = flag(args, "--tty");
@@ -93,7 +94,10 @@ fn run(args: &[String]) -> Result<()> {
         }
     }
 
-    let bios = std::fs::read(bios_path)?;
+    let bios = match bios_path {
+        Some(p) => std::fs::read(p)?,
+        None => dwrc_runtime::bios::BUILTIN_BIOS.to_vec(),
+    };
     let mut disc = Disc::open(&cue)?;
     let ident = dwrc_disc::identify(&mut disc)?.context("disc not recognised")?;
     println!("{} ({}) region {:?}", ident.title, ident.serial, ident.region);
@@ -135,6 +139,16 @@ fn run(args: &[String]) -> Result<()> {
         _ => {}
     }
     psx.bus.tty_echo = tty;
+    // --card1/--card2 <file.mcd>: use (and afterwards save) memory card images.
+    let card_paths: Vec<(usize, PathBuf)> =
+        [("--card1", 0usize), ("--card2", 1)].iter().filter_map(|(f, slot)| opt(args, f).map(|p| (*slot, PathBuf::from(p)))).collect();
+    for (slot, path) in &card_paths {
+        let card = match std::fs::read(path) {
+            Ok(d) if d.len() == dwrc_psx::memcard::CARD_SIZE => dwrc_psx::memcard::MemoryCard::from_bytes(d.into_boxed_slice()),
+            _ => dwrc_psx::memcard::MemoryCard::new_formatted(),
+        };
+        psx.bus.sio.cards[*slot] = Some(card);
+    }
     psx.insert_disc(Box::new(disc) as Box<dyn SectorSource>, region);
     let entry = exe.pc;
     if fast {
@@ -162,6 +176,29 @@ fn run(args: &[String]) -> Result<()> {
         );
     }
     mod_rt.install(&mut psx);
+    // --trace-bios: which BIOS kernel functions the game itself calls.
+    type Calls = std::collections::BTreeMap<(u32, u32), (u64, u64, u32)>;
+    let bios_calls: std::sync::Arc<std::sync::Mutex<Calls>> = Default::default();
+    let frame_no = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    if flag(args, "--trace-bios") {
+        for table in [0xA0u32, 0xB0, 0xC0] {
+            let (calls, fno) = (bios_calls.clone(), frame_no.clone());
+            psx.bus.add_hook(
+                table,
+                Box::new(move |cpu, _bus| {
+                    let ra = cpu.regs[31];
+                    // Calls from game code (above the kernel's RAM area), not from the BIOS itself.
+                    if ra & 0x1FFF_FFFF >= 0x1_0000 && ra & 0x1FFF_FFFF < 0x80_0000 {
+                        let f = fno.load(std::sync::atomic::Ordering::Relaxed);
+                        let mut c = calls.lock().unwrap();
+                        let e = c.entry((table, cpu.regs[9] & 0xFF)).or_insert((0, f, ra));
+                        e.0 += 1;
+                    }
+                    dwrc_psx::HookAction::Continue
+                }),
+            );
+        }
+    }
     if let Some(d) = &shots {
         std::fs::create_dir_all(d)?;
     }
@@ -178,6 +215,7 @@ fn run(args: &[String]) -> Result<()> {
         }
         state.buttons = mod_rt.filter_input(state.buttons);
         psx.bus.sio.pads[0].state = state;
+        frame_no.store(f, std::sync::atomic::Ordering::Relaxed);
         psx.run_frame();
         mod_rt.on_frame(&mut psx, f);
         psx.bus.spu.take_output(&mut audio);
@@ -192,6 +230,17 @@ fn run(args: &[String]) -> Result<()> {
             }
         }
         audio.clear();
+    }
+    for (slot, path) in &card_paths {
+        if let Some(c) = &psx.bus.sio.cards[*slot] {
+            std::fs::write(path, &c.data)?;
+        }
+    }
+    if flag(args, "--trace-bios") {
+        println!("BIOS functions called by the game (table:function  calls  first frame  example caller):");
+        for ((t, n), (count, first, ra)) in bios_calls.lock().unwrap().iter() {
+            println!("  {t:02X}:{n:02X}  {count:>9}  {first:>6}  {ra:08x}");
+        }
     }
     if flag(args, "--pcs") {
         // Sample where the CPU spends time over a few frames.

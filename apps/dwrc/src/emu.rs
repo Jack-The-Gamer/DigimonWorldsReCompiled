@@ -30,6 +30,7 @@ pub struct EmuStatus {
     pub title: String,
     pub mod_log: Vec<String>,
     pub pal: bool,
+    pub bios: String,
 }
 
 pub struct Shared {
@@ -118,6 +119,7 @@ fn run(
         st.engine = session.psx.engine_name().to_string();
         st.title = session.ident.title.clone();
         st.mod_log = session.mods.log.clone();
+        st.bios = session.bios_name.clone();
     }
     audio.clear();
     let mut pixels = Vec::new();

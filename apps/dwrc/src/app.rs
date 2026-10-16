@@ -7,7 +7,7 @@ use dwrc_disc::GameId;
 use crate::mods_page::{ModsUi, Tab};
 use dwrc_psx::Button;
 use dwrc_runtime::bios::region_label;
-use dwrc_runtime::config::{Aspect, EngineKind, Filter};
+use dwrc_runtime::config::{Aspect, BiosMode, EngineKind, Filter};
 use dwrc_runtime::{Config, DiscStatus, Library, Paths};
 use eframe::egui::{self, Align, Align2, Color32, Key, Layout, RichText, Sense, Stroke, TextureHandle, TextureOptions, Vec2};
 use std::collections::HashMap;
@@ -279,14 +279,17 @@ impl App {
             .frame(egui::Frame::default().fill(PANEL_BG).inner_margin(egui::Margin::symmetric(18, 10)))
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("BIOS").strong());
+                    ui.label(RichText::new("BIOS").strong()).on_hover_text(
+                        "A BIOS dumped from your own console is optional. Without one, games start with the built-in \
+                         open-source BIOS (OpenBIOS). Your own BIOS makes the BIOS's own routines exact too.",
+                    );
                     for region in [dwrc_disc::ident::Region::NtscU, dwrc_disc::ident::Region::Pal, dwrc_disc::ident::Region::NtscJ] {
-                        let (txt, col) = match self.lib.bios_for(region) {
-                            Some(b) => (
+                        let (txt, col) = match self.lib.bios_choice(region, self.cfg.emulation.bios) {
+                            dwrc_runtime::library::BiosChoice::Console(b) => (
                                 format!("✔ {} – {}", region_label(region), b.info.known_name.clone().unwrap_or_else(|| b.info.version.clone())),
                                 OK,
                             ),
-                            None => (format!("– {}", region_label(region)), MUTED),
+                            dwrc_runtime::library::BiosChoice::BuiltIn => (format!("{} – built-in", region_label(region)), MUTED),
                         };
                         ui.label(RichText::new(txt).color(col));
                         ui.add_space(10.0);
@@ -316,13 +319,13 @@ impl App {
                     ui.label(RichText::new("Bring your own discs").size(18.0).strong());
                     ui.label(
                         RichText::new(
-                            "Re:Compiled runs your own disc images (.cue/.bin) and your console's BIOS. Nothing is copied or modified. \
-                             Point it at the folder where you keep them:",
+                            "Re:Compiled runs your own disc images: the .bin is all it needs (a .cue is optional). \
+                             A BIOS dump is optional too. Nothing is copied or modified. Point it at the folder where you keep them:",
                         )
                         .color(MUTED),
                     );
                     ui.add_space(6.0);
-                    if ui.add(egui::Button::new(RichText::new("Scan a folder for discs & BIOS…").size(16.0)).fill(ACCENT_DIM)).clicked()
+                    if ui.add(egui::Button::new(RichText::new("Scan a folder for discs…").size(16.0)).fill(ACCENT_DIM)).clicked()
                         && self.job.is_none()
                     {
                         if let Some(d) = rfd::FileDialog::new().set_title("Folder with your disc images and BIOS").pick_folder() {
@@ -483,8 +486,26 @@ impl App {
                     }
                 });
                 section(ui, "Emulation", |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("BIOS");
+                        changed |= ui
+                            .radio_value(&mut self.cfg.emulation.bios, BiosMode::Auto, "Your console's BIOS when added, otherwise built-in")
+                            .changed();
+                        changed |= ui.radio_value(&mut self.cfg.emulation.bios, BiosMode::BuiltIn, "Always built-in").changed();
+                    });
+                    ui.label(
+                        RichText::new(
+                            "The built-in BIOS is OpenBIOS (open source, MIT). Game code runs the same with either; a BIOS dumped from your \
+                             own console also makes the BIOS's own routines exact. Saves work with both.",
+                        )
+                        .color(MUTED)
+                        .small(),
+                    );
                     changed |= ui
-                        .checkbox(&mut self.cfg.emulation.fast_boot, "Fast boot (skip the PlayStation logo; the BIOS still initialises normally)")
+                        .checkbox(
+                            &mut self.cfg.emulation.fast_boot,
+                            "Fast boot (skip the PlayStation logo with your own BIOS; the built-in BIOS always boots straight into the game)",
+                        )
                         .changed();
                     changed |= ui.checkbox(&mut self.cfg.emulation.memory_card_2, "Insert a memory card in slot 2").changed();
                     ui.horizontal(|ui| {
@@ -677,7 +698,7 @@ impl App {
                 .show(ctx, |ui| {
                     ui.set_min_width(260.0);
                     ui.label(RichText::new(&status.title).strong());
-                    ui.label(RichText::new(format!("Engine: {}", status.engine)).color(MUTED).small());
+                    ui.label(RichText::new(format!("Engine: {} · BIOS: {}", status.engine, status.bios)).color(MUTED).small());
                     ui.add_space(6.0);
                     let b = |ui: &mut egui::Ui, t: &str| ui.add(egui::Button::new(t).min_size(Vec2::new(240.0, 30.0))).clicked();
                     if b(ui, "Resume (Esc)") {
