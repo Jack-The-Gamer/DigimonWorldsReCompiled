@@ -7,6 +7,7 @@
 mod app;
 mod audio;
 mod emu;
+mod footer;
 mod input;
 mod mods_page;
 

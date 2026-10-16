@@ -15,6 +15,5 @@ serde_json.workspace = true
 sha1.workspace = true
 hex.workspace = true
 ureq = { version = "3.4", default-features = false, features = ["rustls", "gzip", "platform-verifier", "win-system-proxy"] }
-
-[dev-dependencies]
 zip = { version = "5.1", default-features = false, features = ["deflate-flate2"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

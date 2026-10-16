@@ -259,6 +259,20 @@ impl ModsConfig {
     }
 }
 
+/// Re:Compiled's own updates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdatesConfig {
+    /// Look for a newer release of Re:Compiled when the launcher starts.
+    pub check_on_start: bool,
+}
+
+impl Default for UpdatesConfig {
+    fn default() -> Self {
+        Self { check_on_start: true }
+    }
+}
+
 /// Settings file format version. 2: default R1 moved from W to E; mods
 /// switched to a shared load order with per-game answers.
 pub const SETTINGS_VERSION: u32 = 2;
@@ -272,6 +286,7 @@ pub struct Config {
     pub emulation: EmulationConfig,
     pub input: InputConfig,
     pub mods: ModsConfig,
+    pub updates: UpdatesConfig,
 }
 
 impl Default for Config {
@@ -283,6 +298,7 @@ impl Default for Config {
             emulation: EmulationConfig::default(),
             input: InputConfig::default(),
             mods: ModsConfig::default(),
+            updates: UpdatesConfig::default(),
         }
     }
 }

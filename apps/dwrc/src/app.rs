@@ -69,6 +69,7 @@ pub struct App {
     autostart: Option<GameId>,
     files_hovering: bool,
     open_files: Vec<std::path::PathBuf>,
+    updater: crate::footer::Updater,
 }
 
 impl App {
@@ -89,8 +90,10 @@ impl App {
             cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
         }
         let mods_ui = ModsUi::new(&paths);
+        let updater = crate::footer::Updater::new(&paths, cfg.updates.check_on_start);
         Self {
             mods_ui,
+            updater,
             files_hovering: false,
             open_files,
             paths,
@@ -275,6 +278,9 @@ impl App {
 
     fn library_screen(&mut self, ctx: &egui::Context) {
         self.top_bar(ctx);
+        if let Some(m) = crate::footer::footer(ctx, &mut self.updater) {
+            self.notify(m, true);
+        }
         egui::CentralPanel::default().frame(egui::Frame::default().fill(Color32::from_rgb(13, 14, 18)).inner_margin(24.0)).show(ctx, |ui| {
             let none_imported = self.lib.games.is_empty();
             if none_imported {
@@ -284,7 +290,7 @@ impl App {
                     ui.label(
                         RichText::new(
                             "Re:Compiled runs your own disc images: the .bin is all it needs (a .cue is optional). \
-                             A BIOS dump is optional too (Settings → BIOS). Nothing is copied or modified. Point it at the folder where you keep them:",
+                             A BIOS dump is optional too (add one under Settings, BIOS). Nothing is copied or modified. Point it at the folder where you keep them:",
                         )
                         .color(MUTED),
                     );
@@ -574,6 +580,9 @@ impl App {
                         .color(MUTED)
                         .small(),
                     );
+                });
+                section(ui, "About", |ui| {
+                    changed |= self.updater.settings(ui, &mut self.cfg.updates.check_on_start);
                 });
                 if let Some(b) = self.rebinding {
                     let pressed = ctx.input(|i| {
@@ -905,6 +914,7 @@ impl App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_job();
+        self.updater.poll(ctx);
         let mut env = crate::mods_page::Env { cfg: &mut self.cfg, paths: &self.paths, lib: &self.lib, running: self.emu.as_ref().map(|e| e.game) };
         if self.mods_ui.poll(ctx, &mut env) {
             self.save_cfg();
@@ -926,6 +936,11 @@ impl eframe::App for App {
             Screen::Settings => self.settings_screen(ctx),
             Screen::Mods => self.mods_screen(ctx),
             Screen::Playing => self.playing_screen(ctx),
+        }
+        if self.screen != Screen::Playing {
+            if let Some(m) = self.updater.window(ctx) {
+                self.notify(m, true);
+            }
         }
         self.overlays(ctx);
     }

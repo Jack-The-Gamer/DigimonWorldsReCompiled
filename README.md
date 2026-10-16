@@ -29,6 +29,10 @@ Your discs are never copied or modified. Saves (memory cards), settings, screens
 
 **Portable mode:** put an empty file named `portable.txt` next to the program and everything is kept in a `data` folder beside it instead.
 
+**Updates:** when a new version is released, an **Update** button appears at the bottom of the Games page. It shows what's new, downloads the new version and replaces the program where it is; your games, saves, settings and mods are kept, and a restart finishes it. **Settings → About** can turn the check off. (A copy built from source updates by pulling and rebuilding instead. Versions before 0.2.2 can't update themselves: download 0.2.2 once by hand.)
+
+**Community:** [Discord](https://discord.gg/zyUF5mUt84) · [Ko-fi](https://ko-fi.com/jackthegamer7) (also on the Games page).
+
 ### Controls
 
 | PlayStation | Keyboard (default) | Gamepad |
@@ -91,7 +95,7 @@ Re:Compiled ships only a documented **template**; mods themselves come from the 
 
 * **`dwrc-psx`** models the console: the R3000A (with a reference interpreter that handles branch/load delay slots, exceptions, the instruction cache and multiply/divide/GTE stalls), the GTE, the GPU (software rasteriser following Mednafen's hardware-verified rules), the SPU (24 ADPCM voices, ADSR, reverb), the CD-ROM controller (command timing, XA-ADPCM streaming), MDEC (FMV decoding), DMA, timers, controllers and memory cards.
 * **`dwrc-recomp`** is the static recompiler. When execution reaches a code region, every block statically reachable from it is translated to native code with Cranelift and run against the same hardware model. Overlays loaded later are translated when reached, and translations are dropped automatically when the game overwrites their memory. A **validation mode** replays every translated block through the reference interpreter and compares registers, memory traffic and COP0/GTE state.
-* **`dwrc-mods`** implements the mod platform and **`dwrc-modhub`** the mod indexes and updates; **`dwrc-runtime`** the library, import/verification, settings and sessions; **`dwrc`** the launcher/player UI; **`dwrc-cli`** developer tools.
+* **`dwrc-mods`** implements the mod platform and **`dwrc-modhub`** the mod indexes, mod updates and the program's own updates; **`dwrc-runtime`** the library, import/verification, settings and sessions; **`dwrc`** the launcher/player UI; **`dwrc-cli`** developer tools.
 
 Details: **[docs/architecture.md](docs/architecture.md)** · accuracy notes: **[docs/accuracy.md](docs/accuracy.md)** · tools: **[docs/dev-tools.md](docs/dev-tools.md)**.
 

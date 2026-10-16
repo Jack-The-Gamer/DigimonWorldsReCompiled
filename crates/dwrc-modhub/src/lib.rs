@@ -7,12 +7,15 @@
 //!   checked against that repository's Releases; any release can be
 //!   installed (update or roll back).
 //! * **Downloads** go through the same `.zip` installer as a manual import.
+//! * **Re:Compiled itself** ([`app_update`]): the latest release is checked
+//!   the same way and can replace the program in place.
 //!
 //! Everything here is blocking; the launcher calls it from worker threads.
 //! Feeds are cached for a day and release lists for six hours, and a failed
 //! fetch falls back to the cached copy, so going offline degrades the
 //! listing instead of emptying it.
 
+pub mod app_update;
 pub mod cache;
 pub mod github;
 pub mod http;
