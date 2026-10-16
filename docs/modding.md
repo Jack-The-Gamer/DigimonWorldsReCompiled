@@ -15,8 +15,10 @@ Releases.
   their defaults. At the bottom of an open card, **Version History** lists
   the mod's releases (update, or go back to an older one), **Open Folder**
   shows its files, and **Delete** removes it after asking; its saved data
-  and option values are kept for if you install it again. **Up** and
-  **Down** change the load order.
+  and option values are kept for if you install it again. To change the
+  load order, drag a card up or down the list (a line shows where it will
+  land; the list scrolls when you drag to its top or bottom edge), or use
+  **Up** and **Down**.
 * **Find mods** browses the mod indexes: the built-in
   [Re:Compiled index](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index)
   plus any you add with **Indexes…** (paste `owner/repo`, the repository's

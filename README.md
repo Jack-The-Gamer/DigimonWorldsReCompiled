@@ -71,7 +71,7 @@ The mod index lives in its own repository, [Jack-The-Gamer/DigimonWorldsReCompil
 
 The launcher has a **Mods** page next to **Games** and **Settings**:
 
-* **Installed** — every mod in one shared load order, switched on per game (DW1 / DW2 / DW3), with options, update checks, a version picker (update or roll back), delete and a safe mode.
+* **Installed** — every mod in one shared load order (drag to reorder), switched on per game (DW1 / DW2 / DW3), with options, update checks, a version picker (update or roll back), delete and a safe mode.
 * **Find mods** — browse mod indexes hosted on GitHub and install with one click. The [Re:Compiled index](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index) is built in; add others with **Indexes…** (`owner/repo` or a link).
 * **Import .zip…** — install a mod you downloaded, or just drop the `.zip` on the window.
 

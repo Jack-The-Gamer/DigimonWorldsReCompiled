@@ -255,6 +255,29 @@ impl ModsConfig {
         changed
     }
 
+    /// Drops `id` into gap `gap` of `visible` (0 is above the first row,
+    /// `visible.len()` below the last), as when a row is dragged there.
+    /// Mods that aren't visible keep their places.
+    pub fn move_to_gap(&mut self, installed: &[&str], visible: &[String], id: &str, gap: usize) -> bool {
+        let before = self.load_order(installed.iter().copied());
+        let mut full = before.clone();
+        let Some(from) = full.iter().position(|x| x == id) else { return false };
+        // The visible row it lands above, or else the one it lands below.
+        let above = visible.get(gap..).unwrap_or_default().iter().find(|v| *v != id).cloned();
+        let below = visible[..gap.min(visible.len())].iter().rev().find(|v| *v != id).cloned();
+        full.remove(from);
+        let at = match (above, below) {
+            (Some(a), _) => full.iter().position(|x| *x == a),
+            (None, Some(b)) => full.iter().position(|x| *x == b).map(|p| p + 1),
+            (None, None) => None,
+        };
+        let Some(at) = at else { return false };
+        full.insert(at, id.to_string());
+        let changed = full != before;
+        self.order = full;
+        changed
+    }
+
     /// Records a fresh install: the mod is switched on for every game it
     /// supports (installing a mod is asking to use it) and loads last.
     pub fn note_installed(&mut self, id: &str, games: &[GameId]) {
@@ -475,5 +498,17 @@ enabled = ["a"]
         assert!(m.move_to_edge(&installed, &vis(&m), "d", false));
         assert_eq!(m.load_order(installed), vec!["b", "a", "c", "d"]);
         assert!(!m.move_within(&installed, &vis(&m), "d", 1));
+        // Dragging: visible rows are b, c, d (a stays hidden in place).
+        assert_eq!(vis(&m), vec!["b", "c", "d"]);
+        assert!(m.move_to_gap(&installed, &vis(&m), "d", 0));
+        assert_eq!(m.load_order(installed), vec!["d", "b", "a", "c"]);
+        assert!(m.move_to_gap(&installed, &vis(&m), "d", 3));
+        assert_eq!(m.load_order(installed), vec!["b", "a", "c", "d"]);
+        assert!(m.move_to_gap(&installed, &vis(&m), "b", 2));
+        assert_eq!(m.load_order(installed), vec!["a", "c", "b", "d"]);
+        // Dropped where it already is: nothing changes.
+        assert!(!m.move_to_gap(&installed, &vis(&m), "b", 1));
+        assert!(!m.move_to_gap(&installed, &vis(&m), "b", 2));
+        assert!(!m.move_to_gap(&installed, &vis(&m), "zz", 0));
     }
 }

@@ -99,6 +99,8 @@ enum Confirm {
 enum Act {
     Toggle(String, GameId, bool),
     Move(String, i32),
+    /// A row dropped into a gap of the visible list (0 = above the first).
+    MoveToGap(String, usize),
     SetOption(String, String, toml::Value),
     ResetOptions(String),
     Expand(String),
@@ -652,11 +654,79 @@ impl ModsUi {
             } else if visible.is_empty() {
                 ui.label(RichText::new("No mods match.").color(MUTED));
             }
+            // Cards can be dragged to a new place in the load order.
+            let mut cards: Vec<egui::Rect> = Vec::new();
+            let mut dragged: Option<(usize, String)> = None;
+            let mut dropped: Option<(usize, String)> = None;
             for (k, id) in visible.iter().enumerate() {
                 let Some(m) = self.mods.iter().find(|m| m.id() == id.as_str()) else { continue };
                 let rank = order.iter().position(|o| o == id).unwrap_or(0) + 1;
                 let offer = self.offer(m);
-                self.mod_row(ui, env, m, rank, k, visible.len(), offer, skips.get(id.as_str()), acts);
+                let r = self.mod_row(ui, env, m, rank, k, visible.len(), offer, skips.get(id.as_str()), acts);
+                if r.dragged() {
+                    dragged = Some((k, m.name().to_string()));
+                }
+                if r.drag_stopped() {
+                    dropped = Some((k, id.clone()));
+                }
+                cards.push(r.rect);
+            }
+            if visible.len() > 1 && cards.len() == visible.len() {
+                let pointer = ui.ctx().pointer_latest_pos();
+                // The gap the pointer is over: 0 is above the first card.
+                let gap = |y: f32| cards.iter().filter(|r| r.center().y < y).count();
+                if let (Some((k, name)), Some(p)) = (&dragged, pointer) {
+                    let g = gap(p.y);
+                    // A line where the card would land (not where it already is).
+                    if g != *k && g != k + 1 {
+                        let y = match g {
+                            0 => cards[0].top() - 3.0,
+                            g if g == cards.len() => cards[g - 1].bottom() + 3.0,
+                            g => (cards[g - 1].bottom() + cards[g].top()) / 2.0,
+                        };
+                        let (x0, x1) = (cards[0].left(), cards[0].right());
+                        // Above the list's own clipping, so the line shows at
+                        // its very top and bottom too.
+                        let painter = ui
+                            .ctx()
+                            .layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("mod-drop-line")))
+                            .with_clip_rect(ui.clip_rect().expand2(Vec2::new(0.0, 8.0)));
+                        painter.line_segment([egui::pos2(x0 + 6.0, y), egui::pos2(x1 - 6.0, y)], Stroke::new(3.0_f32, ACCENT));
+                        painter.circle_filled(egui::pos2(x0 + 6.0, y), 5.0, ACCENT);
+                        painter.circle_filled(egui::pos2(x1 - 6.0, y), 5.0, ACCENT);
+                    }
+                    // The mod's name follows the pointer.
+                    egui::Area::new(egui::Id::new("mod-drag-label"))
+                        .order(egui::Order::Tooltip)
+                        .fixed_pos(p + Vec2::new(14.0, 10.0))
+                        .interactable(false)
+                        .show(ui.ctx(), |ui| {
+                            egui::Frame::default().fill(ACCENT_DIM).corner_radius(6.0).inner_margin(egui::Margin::symmetric(10, 5)).show(ui, |ui| {
+                                ui.label(RichText::new(name).strong().color(Color32::WHITE));
+                            });
+                        });
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    // Near the top or bottom edge, the list scrolls.
+                    let clip = ui.clip_rect();
+                    let edge = 48.0;
+                    let speed = if p.y < clip.top() + edge {
+                        (clip.top() + edge - p.y).min(edge) / 3.0
+                    } else if p.y > clip.bottom() - edge {
+                        -(p.y - (clip.bottom() - edge)).min(edge) / 3.0
+                    } else {
+                        0.0
+                    };
+                    if speed != 0.0 {
+                        ui.scroll_with_delta(Vec2::new(0.0, speed));
+                        ui.ctx().request_repaint();
+                    }
+                }
+                if let (Some((k, id)), Some(p)) = (dropped, pointer) {
+                    let g = gap(p.y);
+                    if g != k && g != k + 1 {
+                        acts.push(Act::MoveToGap(id, g));
+                    }
+                }
             }
             for (dir, err) in &self.broken {
                 egui::Frame::default().fill(CARD_BG).corner_radius(8.0).inner_margin(10.0).show(ui, |ui| {
@@ -684,18 +754,28 @@ impl ModsUi {
         offer: Option<UpdateOffer>,
         skips: Option<&Vec<(GameId, Skip)>>,
         acts: &mut Vec<Act>,
-    ) {
+    ) -> egui::Response {
         let id = m.id().to_string();
         let info = &m.manifest.info;
         let expanded = self.expanded.as_deref() == Some(id.as_str());
         let any_on = GameId::ALL.iter().any(|g| env.cfg.mods.is_enabled(*g, &id) && m.supports(*g));
-        // The whole card opens and closes the details; its buttons still work
-        // on their own (the card's click is registered beneath them).
-        let card = ui.scope_builder(egui::UiBuilder::new().id_salt(("mod-card", id.as_str())).sense(egui::Sense::click()), |ui| {
-            let hover = ui.response().contains_pointer();
+        // The whole card opens and closes the details, and can be dragged to
+        // a new place in the load order; its buttons still work on their own
+        // (the card's sense is registered beneath them).
+        let card = ui.scope_builder(egui::UiBuilder::new().id_salt(("mod-card", id.as_str())).sense(egui::Sense::click_and_drag()), |ui| {
+            let dragging = ui.response().dragged();
+            let hover = ui.response().contains_pointer() || dragging;
             // Text in the card passes clicks to the card rather than selecting.
             ui.style_mut().interaction.selectable_labels = false;
-            let stroke = if expanded { Stroke::new(1.0_f32, ACCENT_DIM) } else if hover { Stroke::new(1.0_f32, Color32::from_gray(64)) } else { Stroke::NONE };
+            let stroke = if dragging {
+                Stroke::new(1.5_f32, ACCENT)
+            } else if expanded {
+                Stroke::new(1.0_f32, ACCENT_DIM)
+            } else if hover {
+                Stroke::new(1.0_f32, Color32::from_gray(64))
+            } else {
+                Stroke::NONE
+            };
             let fill = if hover && !expanded { CARD_HOVER } else { CARD_BG };
             egui::Frame::default().fill(fill).stroke(stroke).corner_radius(8.0).inner_margin(10.0).show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -778,6 +858,7 @@ impl ModsUi {
             acts.push(Act::Expand(id.clone()));
         }
         ui.add_space(6.0);
+        card
     }
 
     fn mod_details(&self, ui: &mut egui::Ui, env: &Env, m: &ModInfo, offer: Option<&UpdateOffer>, acts: &mut Vec<Act>) {
@@ -1276,6 +1357,10 @@ impl ModsUi {
                 }
                 Act::Move(id, d) => {
                     changed |= env.cfg.mods.move_within(&installed_refs, &vis, &id, d);
+                    touched_mods = true;
+                }
+                Act::MoveToGap(id, gap) => {
+                    changed |= env.cfg.mods.move_to_gap(&installed_refs, &vis, &id, gap);
                     touched_mods = true;
                 }
                 Act::SetOption(id, opt, v) => {
