@@ -42,9 +42,9 @@ Your discs are never copied or modified. Saves (memory cards), settings, screens
 | D-pad | Arrow keys | D-pad / left stick |
 | ✕ / ○ / □ / △ | X / C / Z / S | South / East / West / North |
 | Start / Select | Enter / Backspace | Start / Back |
-| L1 / R1 / L2 / R2 | Q / E / A / D | Bumpers / triggers |
+| L1 / L2 / R1 / R2 | A / Q / D / E | Bumpers / triggers |
 
-Keys can be rebound in **Settings → Controls**. While playing: **Esc** pause menu · **F10** mods · **F11** fullscreen · **F12** screenshot · hold **Tab** to fast-forward.
+Keys can be rebound in **Settings → Controls**. **F11** switches fullscreen on and off anywhere in the launcher. While playing: **Esc** pause menu · **F10** mods · **F12** screenshot · hold **Tab** to fast-forward.
 
 Memory cards are standard 128 KiB raw images (`card1.mcd`, `card2.mcd` in `saves/<game>/`), interchangeable with other emulators.
 

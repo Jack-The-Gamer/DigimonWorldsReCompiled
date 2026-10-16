@@ -135,6 +135,11 @@ impl App {
         }
     }
 
+    fn toggle_fullscreen(&mut self, ctx: &egui::Context) {
+        self.fullscreen = !self.fullscreen;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
+    }
+
     fn notify(&mut self, msg: impl Into<String>, error: bool) {
         self.toast = Some((msg.into(), Instant::now(), error));
     }
@@ -279,6 +284,12 @@ impl App {
                     ui.label(RichText::new("DIGIMON WORLDS").size(22.0).strong().color(Color32::WHITE));
                     ui.label(RichText::new("Re:Compiled").size(22.0).strong().color(ACCENT));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let close = egui::Button::new(RichText::new("Close").size(16.0).strong().color(MUTED))
+                            .fill(Color32::TRANSPARENT)
+                            .min_size(Vec2::new(96.0, 30.0));
+                        if ui.add(close).on_hover_text("Quit Digimon Worlds Re:Compiled").clicked() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
                         for (screen, label) in [(Screen::Settings, "⚙ Settings"), (Screen::Mods, "Mods"), (Screen::Library, "▶ Games")] {
                             let sel = self.screen == screen;
                             let txt = RichText::new(label).size(16.0).strong().color(if sel { Color32::WHITE } else { MUTED });
@@ -710,9 +721,8 @@ impl App {
         let pad = self.input.poll(ctx, &self.cfg.input.keyboard, !overlay_open);
         let emu = self.emu.as_ref().unwrap();
         emu.set_pad(0, if overlay_open { Default::default() } else { pad });
-        let (esc, f10, f11, f12, tab) = ctx.input(|i| {
-            (i.key_pressed(Key::Escape), i.key_pressed(Key::F10), i.key_pressed(Key::F11), i.key_pressed(Key::F12), i.key_down(Key::Tab))
-        });
+        let (esc, f10, f12, tab) =
+            ctx.input(|i| (i.key_pressed(Key::Escape), i.key_pressed(Key::F10), i.key_pressed(Key::F12), i.key_down(Key::Tab)));
         if esc {
             if self.show_mods_overlay {
                 self.show_mods_overlay = false;
@@ -722,10 +732,6 @@ impl App {
         }
         if f10 {
             self.show_mods_overlay = !self.show_mods_overlay;
-        }
-        if f11 {
-            self.fullscreen = !self.fullscreen;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
         }
         emu.shared.paused.store(overlay_open, Ordering::Relaxed);
         emu.shared.fast_forward.store(tab && !overlay_open, Ordering::Relaxed);
@@ -833,8 +839,7 @@ impl App {
                         reset = true;
                     }
                     if b(ui, if self.fullscreen { "Leave fullscreen (F11)" } else { "Fullscreen (F11)" }) {
-                        self.fullscreen = !self.fullscreen;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
+                        self.toggle_fullscreen(ctx);
                     }
                     ui.horizontal(|ui| {
                         ui.label("Volume");
@@ -1013,6 +1018,16 @@ impl eframe::App for App {
             self.notify(msg, err);
         }
         self.handle_dropped_files(ctx);
+        // F11 toggles fullscreen everywhere (but not while a key is being
+        // bound in Settings). The window's real state wins, in case the
+        // system changed it.
+        let (f11, real_fs) = ctx.input(|i| (i.key_pressed(Key::F11), i.viewport().fullscreen));
+        if let Some(fs) = real_fs {
+            self.fullscreen = fs;
+        }
+        if f11 && self.rebinding.is_none() {
+            self.toggle_fullscreen(ctx);
+        }
         if let Some(g) = self.autostart.take() {
             self.start_game(g);
         }

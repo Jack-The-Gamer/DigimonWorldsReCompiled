@@ -141,10 +141,10 @@ impl Default for InputConfig {
             ("Triangle", "S"),
             ("Start", "Enter"),
             ("Select", "Backspace"),
-            ("L1", "Q"),
-            ("R1", "E"),
-            ("L2", "A"),
-            ("R2", "D"),
+            ("L1", "A"),
+            ("L2", "Q"),
+            ("R1", "D"),
+            ("R2", "E"),
         ];
         Self { keyboard: pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect() }
     }
@@ -296,8 +296,13 @@ impl Default for UpdatesConfig {
 }
 
 /// Settings file format version. 2: default R1 moved from W to E; mods
-/// switched to a shared load order with per-game answers.
-pub const SETTINGS_VERSION: u32 = 2;
+/// switched to a shared load order with per-game answers. 3: default
+/// shoulder buttons moved to L1 A, L2 Q, R1 D, R2 E (were Q, A, E, D).
+pub const SETTINGS_VERSION: u32 = 3;
+
+/// The shoulder-button keys before settings version 3, and since.
+const OLD_TRIGGERS: [(&str, &str); 4] = [("L1", "Q"), ("L2", "A"), ("R1", "E"), ("R2", "D")];
+const NEW_TRIGGERS: [(&str, &str); 4] = [("L1", "A"), ("L2", "Q"), ("R1", "D"), ("R2", "E")];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -373,6 +378,14 @@ impl Config {
             // W was the default for R1 before version 2.
             cfg.input.keyboard.insert("R1".into(), "E".into());
         }
+        // Players still on the old shoulder-button defaults get the new
+        // ones; any shoulder button they rebound keeps all four as they are.
+        let k = &mut cfg.input.keyboard;
+        if version < 3 && OLD_TRIGGERS.iter().all(|(b, key)| k.get(*b).is_none_or(|v| v == key)) {
+            for (b, key) in NEW_TRIGGERS {
+                k.insert(b.into(), key.into());
+            }
+        }
         cfg.settings_version = SETTINGS_VERSION;
         Ok(cfg)
     }
@@ -391,8 +404,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_r1_is_e() {
-        assert_eq!(Config::default().input.keyboard.get("R1").map(String::as_str), Some("E"));
+    fn default_triggers() {
+        let k = Config::default().input.keyboard;
+        let got: Vec<&str> = ["L1", "L2", "R1", "R2"].iter().map(|b| k[*b].as_str()).collect();
+        assert_eq!(got, vec!["A", "Q", "D", "E"]);
+    }
+
+    #[test]
+    fn migrates_old_trigger_defaults() {
+        let keys = |t: &str| {
+            let k = Config::from_toml(t).unwrap().input.keyboard;
+            ["L1", "L2", "R1", "R2"].iter().map(|b| k.get(*b).cloned().unwrap_or_default()).collect::<Vec<_>>().join(" ")
+        };
+        // The old defaults (version 2) move to the new ones.
+        assert_eq!(keys("settings_version = 2\n[input.keyboard]\nL1 = \"Q\"\nL2 = \"A\"\nR1 = \"E\"\nR2 = \"D\"\nCross = \"X\"\n"), "A Q D E");
+        // A version 1 file with R1 on W gets there too.
+        assert_eq!(keys("[input.keyboard]\nL1 = \"Q\"\nL2 = \"A\"\nR1 = \"W\"\nR2 = \"D\"\n"), "A Q D E");
+        // A player who rebound any shoulder button keeps all four.
+        assert_eq!(keys("settings_version = 2\n[input.keyboard]\nL1 = \"Q\"\nL2 = \"A\"\nR1 = \"E\"\nR2 = \"F\"\n"), "Q A E F");
+        // Already version 3: left alone, even if it matches the old defaults.
+        assert_eq!(keys("settings_version = 3\n[input.keyboard]\nL1 = \"Q\"\nL2 = \"A\"\nR1 = \"E\"\nR2 = \"D\"\n"), "Q A E D");
     }
 
     #[test]
@@ -411,8 +442,10 @@ speed = 3
 enabled = ["a"]
 "#;
         let c = Config::from_toml(old).unwrap();
-        assert_eq!(c.input.keyboard["R1"], "E");
-        assert_eq!(c.input.keyboard["L1"], "Q");
+        // R1 on W (the version 1 default) and L1 on Q: old defaults, so
+        // they move to the current ones.
+        assert_eq!(c.input.keyboard["R1"], "D");
+        assert_eq!(c.input.keyboard["L1"], "A");
         assert!(c.mods.is_enabled(GameId::Dw1, "a") && c.mods.is_enabled(GameId::Dw1, "b"));
         assert!(c.mods.is_enabled(GameId::Dw3, "a") && !c.mods.is_enabled(GameId::Dw3, "b"));
         assert!(!c.mods.is_enabled(GameId::Dw2, "a"));
