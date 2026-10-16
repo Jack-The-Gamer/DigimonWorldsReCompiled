@@ -119,7 +119,9 @@ fn releases_update_and_install() {
             {{"tag_name":"v1.0.0","assets":[{{"name":"cool-1.0.0.zip","browser_download_url":"{base}/dl/cool-1.0.0.zip"}}]}}]"#
     );
     set(&routes, "/repos/me/cool/releases?per_page=100", 200, releases.as_bytes());
-    set(&routes, "/dl/cool-1.1.0.zip", 200, &mod_zip("cool", "1.1.0"));
+    // Like GitHub, the download link redirects to where the file is stored.
+    routes.lock().unwrap().insert("/dl/cool-1.1.0.zip".into(), (302, vec![("Location".into(), "/storage/cool-1.1.0.zip?sig=1".into())], vec![]));
+    set(&routes, "/storage/cool-1.1.0.zip?sig=1", 200, &mod_zip("cool", "1.1.0"));
     let r = hub.fetch_releases("me/cool", "cool", false);
     assert!(r.error.is_none(), "{:?}", r.error);
     assert_eq!(r.releases.len(), 2);

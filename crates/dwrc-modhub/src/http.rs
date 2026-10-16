@@ -4,6 +4,12 @@
 //! TLS uses rustls with the operating system's certificate verifier, and
 //! proxies come from the usual environment variables (and, on Windows, the
 //! system proxy settings), so the launcher works wherever a browser does.
+//!
+//! Redirects are followed here rather than by ureq: through some proxies
+//! GitHub's release-download redirect arrives as a chunked `Connection:
+//! close` response, after which ureq 3.4's own redirect handling misreads
+//! the next response ("chunk expected crlf"). Reading each hop's body to the
+//! end and starting the next request afresh avoids that.
 
 use anyhow::{anyhow, bail, Result};
 use std::io::{Read, Write};
@@ -18,6 +24,8 @@ pub const USER_AGENT: &str = concat!("DigimonWorldsReCompiled/", env!("CARGO_PKG
 pub const MAX_TEXT: u64 = 32 << 20;
 /// Largest mod download.
 pub const MAX_DOWNLOAD: u64 = 1 << 30;
+/// Redirects followed per request (GitHub downloads use one or two).
+const MAX_REDIRECTS: usize = 8;
 
 /// Shared progress for a download (read by the UI thread).
 #[derive(Debug, Default)]
@@ -59,6 +67,27 @@ fn describe(e: ureq::Error) -> anyhow::Error {
     }
 }
 
+/// Where a redirect from `base` to `location` leads (absolute, `//host/…`,
+/// `/path` or a relative path).
+fn redirect_target(base: &str, location: &str) -> Option<String> {
+    let loc = location.trim();
+    if loc.starts_with("https://") || loc.starts_with("http://") {
+        return Some(loc.to_string());
+    }
+    let (scheme, rest) = base.split_once("://")?;
+    if let Some(r) = loc.strip_prefix("//") {
+        return Some(format!("{scheme}://{r}"));
+    }
+    let host_end = rest.find('/').unwrap_or(rest.len());
+    let origin = format!("{scheme}://{}", &rest[..host_end]);
+    if loc.starts_with('/') {
+        return Some(format!("{origin}{loc}"));
+    }
+    let path = rest[host_end..].split(['?', '#']).next().unwrap_or("");
+    let dir = path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+    Some(format!("{origin}{dir}/{loc}"))
+}
+
 impl Http {
     pub fn new() -> Self {
         use ureq::tls::{RootCerts, TlsConfig};
@@ -69,6 +98,7 @@ impl Http {
             .http_status_as_error(false)
             .timeout_connect(Some(Duration::from_secs(15)))
             .timeout_recv_response(Some(Duration::from_secs(30)))
+            .max_redirects(0)
             .build();
         let github_api = std::env::var("DWRC_GITHUB_API")
             .ok()
@@ -80,6 +110,32 @@ impl Http {
     }
 
     fn get(&self, url: &str, accept: Option<&str>) -> Result<ureq::http::Response<ureq::Body>> {
+        let mut url = url.to_string();
+        let mut hops = 0;
+        loop {
+            let mut resp = self.get_once(&url, accept)?;
+            let status = resp.status().as_u16();
+            let location = resp.headers().get("location").and_then(|v| v.to_str().ok()).map(str::to_string);
+            match (status, location) {
+                (301 | 302 | 303 | 307 | 308, Some(loc)) => {
+                    hops += 1;
+                    if hops > MAX_REDIRECTS {
+                        bail!("too many redirects");
+                    }
+                    let next = redirect_target(&url, &loc).ok_or_else(|| anyhow!("the server redirected to an unusable address"))?;
+                    if url.starts_with("https://") && next.starts_with("http://") {
+                        bail!("the server redirected to an insecure (http) address");
+                    }
+                    // Finish the redirect's own (empty) body before moving on.
+                    let _ = resp.body_mut().with_config().limit(1 << 20).read_to_vec();
+                    url = next;
+                }
+                _ => return self.check_status(resp),
+            }
+        }
+    }
+
+    fn get_once(&self, url: &str, accept: Option<&str>) -> Result<ureq::http::Response<ureq::Body>> {
         let mut req = self.agent.get(url);
         if let Some(a) = accept {
             req = req.header("Accept", a);
@@ -87,7 +143,10 @@ impl Http {
         if url.starts_with(&self.github_api) {
             req = req.header("X-GitHub-Api-Version", "2022-11-28");
         }
-        let resp = req.call().map_err(describe)?;
+        req.call().map_err(describe)
+    }
+
+    fn check_status(&self, resp: ureq::http::Response<ureq::Body>) -> Result<ureq::http::Response<ureq::Body>> {
         let status = resp.status().as_u16();
         if status >= 400 {
             let h = |n: &str| resp.headers().get(n).and_then(|v| v.to_str().ok()).map(str::to_string);
@@ -170,5 +229,19 @@ impl Http {
             let _ = std::fs::remove_file(&part);
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redirect_target as t;
+
+    #[test]
+    fn redirects() {
+        assert_eq!(t("https://a.com/x/y?q", "https://b.com/z").as_deref(), Some("https://b.com/z"));
+        assert_eq!(t("https://a.com/x/y?q", "//b.com/z").as_deref(), Some("https://b.com/z"));
+        assert_eq!(t("https://a.com/x/y?q", "/z?k=1").as_deref(), Some("https://a.com/z?k=1"));
+        assert_eq!(t("http://127.0.0.1:9/x/y", "z.zip").as_deref(), Some("http://127.0.0.1:9/x/z.zip"));
+        assert_eq!(t("https://a.com", "z").as_deref(), Some("https://a.com/z"));
     }
 }

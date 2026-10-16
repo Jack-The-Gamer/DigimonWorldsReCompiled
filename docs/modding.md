@@ -100,6 +100,22 @@ Dependencies are loaded before the mods that need them.
 
 ## Publishing a mod
 
+There are two ways; the launcher treats them the same.
+
+**Hosted in the mod index (no repository of your own).** Open a pull request
+to the [mod index](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index)
+adding `mods/<You>@<id>/` with the mod itself in a `mod/` folder (`mod.toml`
+at its top, set `github = "Jack-The-Gamer/DigimonWorldsReCompiled-mod-index"`),
+plus `description.md` and optionally `thumbnail.png`. The listing's details
+come from `mod.toml`, so there is no `meta.json` to keep in step. To release a
+version, bump `version` in `mod.toml` and get it onto the index's `main`
+branch: the index checks the mod, publishes the release
+`<id>-v<version>` with `<id>-<version>.zip` (its notes are the message of the
+commit that changed the mod) and lists it. [Turbo Text](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index/tree/HEAD/mods/Jack-The-Gamer@turbo-text)
+is published this way. Details: the index's README, "Hosting a mod here".
+
+**In your own repository.**
+
 1. Put the mod in a GitHub repository with `mod.toml` at its root and set
    `github = "you/your-mod"`.
 2. For each version, bump `version` and publish a **GitHub Release** tagged
@@ -108,10 +124,9 @@ Dependencies are loaded before the mods that need them.
    [`templates/release-mod.yml`](templates/release-mod.yml) is a GitHub
    Actions workflow that does all of it for you: bump `version` in
    `mod.toml`, push (GitHub Desktop is fine), and the release appears.
-3. List it in the [mod index](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index)
-   with a pull request adding `mods/<You>@<id>/meta.json` and
-   `description.md`. The index follows your releases nightly, so new versions
-   need no further pull requests.
+3. List it in the mod index with a pull request adding
+   `mods/<You>@<id>/meta.json` and `description.md`. The index follows your
+   releases nightly, so new versions need no further pull requests.
 
 Players who installed your mod are offered each new release in the launcher.
 Release tags may also be `<id>-v1.2.0` when one repository holds several mods.
@@ -178,7 +193,7 @@ end)
 
 ### Example: Turbo Text
 
-The full mod, with options and its release workflow, is [Jack-The-Gamer/dwrc-turbo-text](https://github.com/Jack-The-Gamer/dwrc-turbo-text); this is its core:
+The full mod, with its options, is [hosted in the mod index](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index/tree/HEAD/mods/Jack-The-Gamer@turbo-text); this is its core:
 
 ```lua
 local hold, tap = dwrc.buttons[dwrc.options.hold], dwrc.buttons.Cross

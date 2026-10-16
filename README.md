@@ -71,7 +71,7 @@ Mods work the way they do in Gen1Recomp. The launcher has a **Mods** page next t
 
 Mods can replace files on the (virtual) disc, patch memory, and run Lua scripts with hooks on any code address, every frame and on controller input, with their own options and save data. Scripts run in a sandbox with no file, network or OS access. Authors publish versions as GitHub Releases, and players are offered updates automatically. **F10** in game switches the running game's mods on and off.
 
-Re:Compiled ships only a documented **template**; mods themselves come from the index, for example [**Turbo Text**](https://github.com/Jack-The-Gamer/dwrc-turbo-text) (hold R2 to race through dialogue). See **[docs/modding.md](docs/modding.md)** for using, writing and publishing mods.
+Re:Compiled ships only a documented **template**; mods themselves come from the index, for example [**Turbo Text**](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index/tree/HEAD/mods/Jack-The-Gamer@turbo-text) (hold R2 to race through dialogue). Authors can publish a mod from their own GitHub repository or host it in the index itself. See **[docs/modding.md](docs/modding.md)** for using, writing and publishing mods.
 
 ## How it works
 
