@@ -76,7 +76,7 @@ categories = ["QOL"]         # 1-4 of GAMEPLAY CONTENT BALANCE ART AUDIO UI QOL
                              # TRANSLATION TOTAL_CONVERSION LIBRARY TOOL OTHER
 tags = ["text", "speed"]     # optional
 license = "MIT"              # optional
-engine = ">=0.2"             # optional: Re:Compiled versions it works with
+engine = ">=1.0"             # optional: Re:Compiled versions it works with
 dependencies = ["core-lib@>=1.2"]   # optional: mods that must also be on
 conflicts = ["other-mod"]           # optional: mods it cannot run with
 experimental = false         # optional: marks unfinished work

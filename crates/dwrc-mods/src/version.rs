@@ -89,6 +89,9 @@ mod tests {
         assert!(!is_newer("1.0", "1.0.0"));
         assert!(satisfies("0.2.0", ">=0.2"));
         assert!(satisfies("0.2.5", ">=0.2 <0.3"));
+        // 1.0 keeps mods written for 0.2 working, and is offered as an update.
+        assert!(satisfies("1.0.0", ">=0.2") && satisfies("1.0.0", ">=0.2.6") && !satisfies("1.0.0", ">=0.2 <0.3"));
+        assert!(is_newer("1.0.0", "0.2.10") && is_newer("0.2.10", "0.2.9"));
         assert!(!satisfies("0.1.9", ">=0.2"));
         assert!(satisfies("0.3.0-dev", ">=0.3"));
         assert!(valid_range("^1.2") && !valid_range(">=banana"));

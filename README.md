@@ -31,7 +31,7 @@ Your discs are never copied or modified. Saves (memory cards), settings, screens
 
 **Video:** **Settings → Video** offers sharp original pixels, smoothed scaling, or a **CRT** filter that draws the picture like a CRT television (scanlines, phosphor mask and screen curvature, each adjustable), plus 4:3, integer-scaled or stretched output.
 
-**Updates:** when a new version is released, an **Update** button appears at the bottom of the Games page. It shows what's new, downloads the new version and replaces the program where it is; your games, saves, settings and mods are kept, and a restart finishes it. **Settings → About** can turn the check off. (A copy built from source updates by pulling and rebuilding instead. Versions before 0.2.2 can't update themselves: download 0.2.2 once by hand.)
+**Updates:** when a new version is released, an **Update** button appears at the bottom of the Games page. It shows what's new, downloads the new version and replaces the program where it is; your games, saves, settings and mods are kept, and a restart finishes it. **Settings → About** can turn the check off. (A copy built from source updates by pulling and rebuilding instead. Versions before 0.2.2 can't update themselves: download the latest release once by hand.)
 
 **Community:** [Discord](https://discord.gg/zyUF5mUt84) · [Ko-fi](https://ko-fi.com/jackthegamer7) (also on the Games page).
 
