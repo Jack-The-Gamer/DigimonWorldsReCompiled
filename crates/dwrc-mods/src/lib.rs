@@ -263,7 +263,7 @@ pub struct ModRuntime {
 impl ModRuntime {
     /// Applies disc overrides and loads patches/scripts for `mods` (in
     /// load order: later mods win on conflicts).
-    pub fn build(game: GameId, mods: &[EnabledMod], disc_ctx: &mut disc::DiscContext) -> Self {
+    pub fn build(game: GameId, serial: &str, mods: &[EnabledMod], disc_ctx: &mut disc::DiscContext) -> Self {
         let mut rt = ModRuntime { patches: Vec::new(), scripts: Vec::new(), log: Vec::new() };
         for m in mods.iter() {
             let id = m.info.id().to_string();
@@ -280,7 +280,7 @@ impl ModRuntime {
             }
             if let Some(s) = &m.info.manifest.info.script {
                 let path = m.info.root.join(s);
-                match script::ScriptHost::load(&id, game, &path, m.options.clone(), m.data_dir.clone()) {
+                match script::ScriptHost::load(&id, game, serial, &path, m.options.clone(), m.data_dir.clone()) {
                     Ok(h) => {
                         rt.log.push(format!("[{id}] script loaded"));
                         rt.scripts.push(h);
@@ -318,6 +318,19 @@ impl ModRuntime {
                 }
             }
         }
+    }
+
+    /// The console speed the scripts ask for (the highest) and the sound
+    /// chip voices they want kept at real time while sped up.
+    pub fn speed(&self) -> (u32, u32) {
+        self.scripts.iter().map(|s| s.speed()).fold((1, 0), |(sp, m), (s, v)| (sp.max(s), m | v))
+    }
+
+    /// Hands the scripts' speed requests to the console's sound chip.
+    pub fn apply_speed(&self, psx: &mut dwrc_psx::Psx) {
+        let (speed, voices) = self.speed();
+        psx.bus.spu.set_speed(speed);
+        psx.bus.spu.realtime_voices = voices;
     }
 
     /// Lets scripts transform the controller state before each frame.

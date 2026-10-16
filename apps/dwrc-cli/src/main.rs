@@ -123,7 +123,7 @@ fn run(args: &[String]) -> Result<()> {
     }
     let mut mod_rt = {
         let mut ctx = dwrc_mods::disc::DiscContext::new(&mut disc);
-        dwrc_mods::ModRuntime::build(ident.game, &enabled, &mut ctx)
+        dwrc_mods::ModRuntime::build(ident.game, &ident.serial, &enabled, &mut ctx)
     };
     for l in &mod_rt.log {
         println!("mod: {l}");
@@ -206,6 +206,7 @@ fn run(args: &[String]) -> Result<()> {
     let mut buf = Vec::new();
     let mut audio = Vec::new();
     let mut audio_total = 0usize;
+    let mut last_speed = 1;
     for f in 1..=frames {
         let mut state = dwrc_psx::PadState::default();
         for (sf, b, d) in &script {
@@ -215,6 +216,11 @@ fn run(args: &[String]) -> Result<()> {
         }
         state.buttons = mod_rt.filter_input(state.buttons);
         psx.bus.sio.pads[0].state = state;
+        mod_rt.apply_speed(&mut psx);
+        if psx.bus.spu.speed != last_speed {
+            last_speed = psx.bus.spu.speed;
+            println!("frame {f}: speed x{last_speed}");
+        }
         frame_no.store(f, std::sync::atomic::Ordering::Relaxed);
         psx.run_frame();
         mod_rt.on_frame(&mut psx, f);

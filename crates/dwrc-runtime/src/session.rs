@@ -72,7 +72,7 @@ impl Session {
         let enabled_mods: Vec<String> = mods.iter().map(|m| m.info.id().to_string()).collect();
         let mut mod_rt = {
             let mut ctx = dwrc_mods::disc::DiscContext::new(&mut disc);
-            ModRuntime::build(game, &mods, &mut ctx)
+            ModRuntime::build(game, &ident.serial, &mods, &mut ctx)
         };
         for l in &mod_rt.log {
             log::info!("{l}");
@@ -136,6 +136,9 @@ impl Session {
     }
 
     pub fn run_frame(&mut self) {
+        // Mods may ask for the console to run faster (and for some sound
+        // chip voices to keep real time meanwhile).
+        self.mods.apply_speed(&mut self.psx);
         self.psx.run_frame();
         self.frame += 1;
         self.mods.on_frame(&mut self.psx, self.frame);
@@ -146,6 +149,11 @@ impl Session {
         if self.last_flush.elapsed() > Duration::from_secs(2) {
             self.flush_memcards();
         }
+    }
+
+    /// How many times faster than real time the console runs (set by mods).
+    pub fn speed(&self) -> u32 {
+        self.psx.bus.spu.speed.max(1)
     }
 
     /// Renders the current display into ARGB pixels.

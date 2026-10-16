@@ -157,6 +157,7 @@ Scripts run in an isolated, sandboxed Lua 5.4 state per mod (see *Safety*). The 
 | | |
 |---|---|
 | `dwrc.game` | `"dw1"`, `"dw2"` or `"dw3"` |
+| `dwrc.serial` | the disc's serial, e.g. `"SLUS-01032"` |
 | `dwrc.version` | Re:Compiled version |
 | `dwrc.options` | this mod's option values, by id |
 | `dwrc.data` | a table saved per mod (in `mod-data/<game>/<mod>/data.json`) when the game closes or on `dwrc.save()` |
@@ -164,8 +165,10 @@ Scripts run in an isolated, sandboxed Lua 5.4 state per mod (see *Safety*). The 
 | `dwrc.log(text)` | write to the log (shown in the F10 mod log); `print` does the same |
 | `dwrc.on_frame(fn(ctx))` | after every video frame |
 | `dwrc.on_input(fn(buttons) -> buttons)` | before every frame; return a modified controller state |
-| `dwrc.on_exec(addr, fn(ctx) -> bool)` | when the CPU reaches `addr`; return `true` if you changed the PC |
+| `dwrc.on_exec(addr, fn(ctx) -> bool)` | when the CPU reaches `addr`; return `true` if you changed the PC. May also be called later (from `on_frame`, say, once the code is in memory): the hook goes in before the next frame |
 | `dwrc.save()` | write `dwrc.data` now |
+| `dwrc.set_speed(n)`, `dwrc.speed()` | run the console `n` times faster than real time (1 to 4; 1 is normal). The launcher paces itself to match and still plays sound in real time |
+| `dwrc.set_realtime_voices(mask)` | sound chip voices (bit 0 = voice 0 … bit 23) that keep real-time pitch and timing while sped up; the others play faster like the rest of the game |
 
 The `ctx` passed to callbacks:
 
@@ -179,6 +182,7 @@ The `ctx` passed to callbacks:
 | `ctx:ret(value)` | return from the current function (at its first instruction) with `v0 = value` |
 | `ctx:frame()` | frame counter (in `on_frame`) |
 | `ctx:buttons()`, `ctx:pressed("Cross")` | controller state |
+| `ctx:find(pattern [, from, to])` | the first word-aligned address in RAM (from `0x80000000` to `0x80200000` by default) where `pattern` occurs, or `nil`. The pattern is 32-bit words in hex with `?` for any digit: `"27bdffc8 3c02???? 8c42????"`. Handy for finding code that sits at different addresses in each game or release |
 
 Writes that hit translated code automatically invalidate it, so scripts can patch code safely.
 
@@ -208,6 +212,24 @@ dwrc.on_input(function(b)
   else
     n = 0
   end
+  return b
+end)
+```
+
+### Example: running faster
+
+`dwrc.set_speed` makes the whole console run faster. Sound would speed up
+with it, so a mod that wants the music left alone also has to slow the game's
+music driver back down and tell the sound chip which voices play music. The
+[Fast-Forward mod](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index/tree/HEAD/mods/Jack-The-Gamer@fast-forward)
+does exactly that for all three games: it finds Sony's sound library with
+`ctx:find`, lets the sequencer play on one tick in two (or three), and marks
+the music's voices with `dwrc.set_realtime_voices`. The bare speed change is
+one line:
+
+```lua
+dwrc.on_input(function(b)
+  if (b & dwrc.buttons.L2) ~= 0 then dwrc.set_speed(2) else dwrc.set_speed(1) end
   return b
 end)
 ```

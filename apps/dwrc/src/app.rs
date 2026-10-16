@@ -814,6 +814,9 @@ impl App {
                     Color32::from_rgb(200, 255, 200),
                 );
             }
+            if status.mod_speed > 1 {
+                fast_forward_badge(ui.painter(), avail.right_top() + Vec2::new(-12.0, 10.0), status.mod_speed);
+            }
         });
         if self.show_pause {
             let mut quit = false;
@@ -1115,6 +1118,28 @@ pub(crate) fn open_folder(p: &std::path::Path) {
     let _ = std::process::Command::new("open").arg(p).spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
     let _ = std::process::Command::new("xdg-open").arg(p).spawn();
+}
+
+/// The "sped up" badge shown while a mod runs the game faster: two
+/// triangles and the factor, right-aligned at `at`.
+fn fast_forward_badge(p: &egui::Painter, at: egui::Pos2, speed: u32) {
+    let fg = Color32::from_rgba_unmultiplied(255, 255, 255, 230);
+    let font = egui::FontId::proportional(18.0);
+    let text = p.layout_no_wrap(format!("{speed}x"), font, fg);
+    let (tri_w, h) = (10.0, 14.0);
+    let w = 6.0 + tri_w * 2.0 + 6.0 + text.size().x + 8.0;
+    let rect = egui::Rect::from_min_size(egui::pos2(at.x - w, at.y), Vec2::new(w, 26.0));
+    p.rect_filled(rect, 6.0, Color32::from_rgba_unmultiplied(0, 0, 0, 150));
+    let cy = rect.center().y;
+    for i in 0..2 {
+        let x = rect.left() + 6.0 + i as f32 * tri_w;
+        p.add(egui::Shape::convex_polygon(
+            vec![egui::pos2(x, cy - h / 2.0), egui::pos2(x + tri_w, cy), egui::pos2(x, cy + h / 2.0)],
+            fg,
+            egui::Stroke::NONE,
+        ));
+    }
+    p.galley(egui::pos2(rect.left() + 6.0 + tri_w * 2.0 + 6.0, cy - text.size().y / 2.0), text, fg);
 }
 
 pub fn save_png(path: &std::path::Path, w: u32, h: u32, argb: &[u32]) -> anyhow::Result<()> {

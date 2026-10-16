@@ -241,6 +241,18 @@ pub struct Spu {
     pub output: Vec<i16>,
     pub output_enabled: bool,
     pending_irq_from_dma: bool,
+    /// Fast-forward: the console runs `speed` times faster than real time.
+    /// One output sample is kept per `speed` samples (the others averaged
+    /// in), so what the player hears plays in real time.
+    pub speed: u32,
+    /// Voices that keep real-time pitch and timing while `speed > 1`: they
+    /// advance only on the kept samples (a music driver slowed to real time
+    /// plays its notes on these). The others run at the console's speed.
+    pub realtime_voices: u32,
+    ff_phase: u32,
+    /// Sped-up voices' mix (L, R) and reverb input (L, R), plus CD audio
+    /// (L, R), summed over the samples between two kept ones.
+    ff_acc: [i32; 6],
 }
 
 impl Default for Spu {
@@ -283,6 +295,20 @@ impl Spu {
             output: Vec::with_capacity(4096),
             output_enabled: true,
             pending_irq_from_dma: false,
+            speed: 1,
+            realtime_voices: 0,
+            ff_phase: 0,
+            ff_acc: [0; 6],
+        }
+    }
+
+    /// Sets the fast-forward factor (1 = real time).
+    pub fn set_speed(&mut self, speed: u32) {
+        let speed = speed.clamp(1, 8);
+        if speed != self.speed {
+            self.speed = speed;
+            self.ff_phase = 0;
+            self.ff_acc = [0; 6];
         }
     }
 
@@ -568,12 +594,32 @@ impl Spu {
     fn tick(&mut self, irq: &mut Irq, cdrom: &mut Cdrom) {
         let gauss = gauss_table();
         let spu_on = self.ctrl & 0x8000 != 0;
+        // Fast-forward: is this one of the samples the player hears?
+        let ff = self.speed > 1;
+        let kept = !ff || self.ff_phase == 0;
+        if ff {
+            self.ff_phase = (self.ff_phase + 1) % self.speed;
+        }
         let mut sum = [0i32; 2];
         let mut rev = [0i32; 2];
+        let mut fast = [0i32; 4];
         let mut prev_out = 0i32;
         let mut cap = [0i32; 2];
         self.tick_noise();
         for vi in 0..24 {
+            let realtime = ff && self.realtime_voices & (1 << vi) != 0;
+            if realtime && !kept {
+                // Held between kept samples: real-time voices neither play
+                // on nor sound here.
+                prev_out = self.voices[vi].out;
+                if vi == 1 {
+                    cap[0] = prev_out;
+                }
+                if vi == 3 {
+                    cap[1] = prev_out;
+                }
+                continue;
+            }
             if self.voices[vi].needs_decode {
                 self.voices[vi].needs_decode = false;
                 self.decode_block(vi, irq);
@@ -603,11 +649,21 @@ impl Spu {
             v.out = out;
             let l = (out * v.vol_l.level) >> 15;
             let r = (out * v.vol_r.level) >> 15;
-            sum[0] += l;
-            sum[1] += r;
-            if self.eon & (1 << vi) != 0 {
-                rev[0] += l;
-                rev[1] += r;
+            let reverb = self.eon & (1 << vi) != 0;
+            if ff && !realtime {
+                fast[0] += l;
+                fast[1] += r;
+                if reverb {
+                    fast[2] += l;
+                    fast[3] += r;
+                }
+            } else {
+                sum[0] += l;
+                sum[1] += r;
+                if reverb {
+                    rev[0] += l;
+                    rev[1] += r;
+                }
             }
             if vi == 1 {
                 cap[0] = out;
@@ -656,10 +712,6 @@ impl Spu {
         if self.ctrl & 1 != 0 {
             cdo_l = (cd_l * self.cd_vol[0] as i32) >> 15;
             cdo_r = (cd_r * self.cd_vol[1] as i32) >> 15;
-            if self.ctrl & 4 != 0 {
-                rev[0] += cdo_l;
-                rev[1] += cdo_r;
-            }
         }
         // Capture buffers: CD left/right, voice 1, voice 3.
         let cp = self.capture_pos * 2;
@@ -668,6 +720,30 @@ impl Spu {
         self.write_ram16(0x800 + cp, cap[0].clamp(-0x8000, 0x7FFF) as i16, irq);
         self.write_ram16(0xC00 + cp, cap[1].clamp(-0x8000, 0x7FFF) as i16, irq);
         self.capture_pos = (self.capture_pos + 1) & 0x1FF;
+        if ff {
+            // Sped-up voices and CD audio: averaged over the samples since
+            // the last kept one, which only the kept sample mixes in.
+            for (a, x) in self.ff_acc.iter_mut().zip([fast[0], fast[1], fast[2], fast[3], cdo_l, cdo_r]) {
+                *a += x;
+            }
+            self.main_l.tick();
+            self.main_r.tick();
+            if !kept {
+                return;
+            }
+            let n = self.speed as i32;
+            let acc = std::mem::take(&mut self.ff_acc);
+            sum[0] += acc[0] / n;
+            sum[1] += acc[1] / n;
+            rev[0] += acc[2] / n;
+            rev[1] += acc[3] / n;
+            cdo_l = acc[4] / n;
+            cdo_r = acc[5] / n;
+        }
+        if self.ctrl & 1 != 0 && self.ctrl & 4 != 0 {
+            rev[0] += cdo_l;
+            rev[1] += cdo_r;
+        }
 
         let (rl, rr) = self.process_reverb(rev[0].clamp(-0x8000, 0x7FFF), rev[1].clamp(-0x8000, 0x7FFF), irq);
 
@@ -678,8 +754,10 @@ impl Spu {
         r += cdo_r + rr;
         let l = l.clamp(-0x8000, 0x7FFF);
         let r = r.clamp(-0x8000, 0x7FFF);
-        self.main_l.tick();
-        self.main_r.tick();
+        if !ff {
+            self.main_l.tick();
+            self.main_r.tick();
+        }
         let l = ((l * self.main_l.level) >> 15).clamp(-0x8000, 0x7FFF);
         let r = ((r * self.main_r.level) >> 15).clamp(-0x8000, 0x7FFF);
         if self.output_enabled {
@@ -851,5 +929,71 @@ impl Spu {
 
     pub fn take_output(&mut self, out: &mut Vec<i16>) {
         out.append(&mut self.output);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A square wave: one looping ADPCM block, 14 samples high then 14 low,
+    /// on voices 0 and 1 (left and right), at one source sample per tick.
+    fn square_spu() -> Spu {
+        let mut s = Spu::new();
+        let mut irq = Irq::default();
+        let a = 0x1000usize;
+        s.ram[a] = 0x00; // shift 12, filter 0
+        s.ram[a + 1] = 0x07; // loop start + end + repeat
+        for j in 0..14 {
+            // Two 4-bit samples per byte: 7 (high), then -7 (low).
+            s.ram[a + 2 + j] = if j < 7 { 0x77 } else { 0x99 };
+        }
+        s.write(0x1AA, 0xC000, &mut irq); // on, unmuted
+        s.write(0x180, 0x3FFF, &mut irq);
+        s.write(0x182, 0x3FFF, &mut irq);
+        for (vi, (l, r)) in [(0x3FFFu16, 0u16), (0, 0x3FFF)].into_iter().enumerate() {
+            let b = vi as u32 * 0x10;
+            s.write(b, l, &mut irq);
+            s.write(b + 2, r, &mut irq);
+            s.write(b + 4, 0x1000, &mut irq);
+            s.write(b + 6, (a >> 3) as u16, &mut irq);
+            s.write(b + 8, 0x000F, &mut irq); // fastest attack, full sustain
+            s.write(b + 0xA, 0x0000, &mut irq);
+        }
+        s.write(0x188, 0b11, &mut irq);
+        s
+    }
+
+    /// Output samples (per channel) and sign changes per channel over `ticks`.
+    fn run(s: &mut Spu, ticks: u64) -> (usize, [usize; 2]) {
+        let (mut irq, mut cd) = (Irq::default(), Cdrom::new());
+        s.sync(s.last_sync + ticks * CYCLES_PER_SAMPLE, &mut irq, &mut cd);
+        let mut out = Vec::new();
+        s.take_output(&mut out);
+        let mut flips = [0; 2];
+        for c in 0..2 {
+            let ch: Vec<i16> = out.iter().skip(c).step_by(2).copied().skip(64).collect();
+            flips[c] = ch.windows(2).filter(|w| (w[0] >= 0) != (w[1] >= 0)).count();
+        }
+        (out.len() / 2, flips)
+    }
+
+    #[test]
+    fn fast_forward_keeps_real_time_voices() {
+        // Real time: 2800 ticks -> 2800 samples, 100 periods (200 sign changes).
+        let mut s = square_spu();
+        let (n, f) = run(&mut s, 2800 + 64);
+        assert_eq!(n, 2864);
+        assert!((198..=201).contains(&f[0]) && (198..=201).contains(&f[1]), "{f:?}");
+
+        // Twice as fast, voice 0 (left) in real time: half as many samples
+        // come out; the left channel keeps its pitch, the right doubles it.
+        let mut s = square_spu();
+        s.set_speed(2);
+        s.realtime_voices = 1;
+        let (n, f) = run(&mut s, 2 * (2800 + 64));
+        assert_eq!(n, 2864);
+        assert!((198..=201).contains(&f[0]), "real-time voice: {f:?}");
+        assert!((396..=401).contains(&f[1]), "sped-up voice: {f:?}");
     }
 }

@@ -12,12 +12,23 @@
 //! dwrc.on_input(function(buttons) return buttons end) -- before each frame
 //! dwrc.buttons.Cross    -- bit masks for each controller button
 //! dwrc.save()            -- persist dwrc.data now
+//! dwrc.serial            -- the disc's serial, e.g. "SLUS-01032"
+//! dwrc.set_speed(n)      -- run the console n times faster (1 = normal, up to 4)
+//! dwrc.speed()           -- the current speed
+//! dwrc.set_realtime_voices(mask) -- sound chip voices (bit per voice) that keep
+//!                          real-time pitch and timing while sped up
 //! ```
+//!
+//! `dwrc.on_exec` may also be called later (from `on_frame`, say, once the
+//! game's code is in memory); the hook is installed before the next frame.
 //!
 //! Callbacks receive a `ctx` giving access to the console while it is
 //! paused at that point: `read8/16/32`, `read_s8/s16/s32`, `write8/16/32`,
 //! `read_bytes`, `write_bytes`, `reg`, `set_reg`, `pc`, `set_pc`, `ret`,
-//! `frame`, `buttons`, `pressed`. An exec hook that changes the PC (for
+//! `frame`, `buttons`, `pressed`, and `find(pattern [, from, to])`, which
+//! returns the first word-aligned address in main RAM (or `from`..`to`, at
+//! most 8 MB) where `pattern` (32-bit words in hex, `?` matching any digit:
+//! `"27bdffc8 3c02???? 8c42????"`) occurs, or nil. An exec hook that changes the PC (for
 //! example with `ctx:ret(value)` to replace a whole function) must return
 //! `true`.
 //!
@@ -36,11 +47,43 @@ use std::sync::{Arc, Mutex};
 
 const REG_NAMES: [&str; 32] = dwrc_mips::REG_NAMES;
 
-#[derive(Default)]
 struct HostState {
     input_cbs: Vec<RegistryKey>,
     frame_cbs: Vec<RegistryKey>,
     exec_hooks: Vec<(u32, Arc<RegistryKey>)>,
+    /// Requested console speed (1 = real time).
+    speed: u32,
+    /// Sound chip voices kept at real-time pitch while sped up.
+    realtime_voices: u32,
+}
+
+impl HostState {
+    fn new() -> Self {
+        Self { input_cbs: Vec::new(), frame_cbs: Vec::new(), exec_hooks: Vec::new(), speed: 1, realtime_voices: 0 }
+    }
+}
+
+/// Parses a `find` pattern: hex words, `?` = any digit. Returns (value, mask) per word.
+fn parse_pattern(p: &str) -> Option<Vec<(u32, u32)>> {
+    let words: Vec<(u32, u32)> = p
+        .split_whitespace()
+        .map(|w| {
+            if w.len() != 8 {
+                return None;
+            }
+            let (mut v, mut m) = (0u32, 0u32);
+            for c in w.chars() {
+                v <<= 4;
+                m <<= 4;
+                if c != '?' {
+                    v |= c.to_digit(16)?;
+                    m |= 0xF;
+                }
+            }
+            Some((v, m))
+        })
+        .collect::<Option<_>>()?;
+    (!words.is_empty()).then_some(words)
 }
 
 pub struct ScriptHost {
@@ -130,6 +173,21 @@ impl UserData for Ctx<'_> {
             Ok(true)
         });
         m.add_method("buttons", |_, c, ()| Ok(c.bus.sio.pads[0].state.buttons));
+        m.add_method("find", |_, c, (pat, from, to): (String, Option<u32>, Option<u32>)| {
+            let words = parse_pattern(&pat).ok_or_else(|| mlua::Error::runtime("find: the pattern must be 8-digit hex words, '?' for any digit"))?;
+            let from = from.unwrap_or(0x8000_0000) & !3;
+            // At most 8 MB (main RAM is 2 MB), so a careless range stays quick.
+            let to = to.unwrap_or(0x8020_0000).min(from.saturating_add(0x80_0000));
+            let len = words.len() as u32 * 4;
+            let mut a = from;
+            while to.checked_sub(a).is_some_and(|room| room >= len) {
+                if words.iter().enumerate().all(|(i, (v, m))| c.bus.peek32(a.wrapping_add(i as u32 * 4)) & m == *v) {
+                    return Ok(Some(a));
+                }
+                a += 4;
+            }
+            Ok(None)
+        });
         m.add_method("pressed", |_, c, name: String| {
             let b = button_from_name(&name).ok_or_else(|| mlua::Error::runtime(format!("unknown button '{name}'")))?;
             Ok(c.bus.sio.pads[0].state.pressed(b))
@@ -222,13 +280,43 @@ fn sandboxed_lua(root: &std::path::Path, id: &str) -> mlua::Result<Lua> {
 }
 
 impl ScriptHost {
-    pub fn load(id: &str, game: dwrc_disc::GameId, path: &std::path::Path, options: crate::OptionValues, data_dir: PathBuf) -> Result<Self> {
+    pub fn load(
+        id: &str,
+        game: dwrc_disc::GameId,
+        serial: &str,
+        path: &std::path::Path,
+        options: crate::OptionValues,
+        data_dir: PathBuf,
+    ) -> Result<Self> {
         let lua = sandboxed_lua(path.parent().unwrap_or(std::path::Path::new(".")), id).map_err(|e| anyhow!("{e}"))?;
-        let state = Arc::new(Mutex::new(HostState::default()));
+        let state = Arc::new(Mutex::new(HostState::new()));
         {
             let api = lua.create_table().map_err(|e| anyhow!("{e}"))?;
             let le = |e: mlua::Error| anyhow!("{e}");
             api.set("game", game.slug()).map_err(le)?;
+            api.set("serial", serial).map_err(le)?;
+            let st = state.clone();
+            api.set(
+                "set_speed",
+                lua.create_function(move |_, n: f64| {
+                    st.lock().unwrap().speed = (n.round() as i64).clamp(1, 4) as u32;
+                    Ok(())
+                })
+                .map_err(le)?,
+            )
+            .map_err(le)?;
+            let st = state.clone();
+            api.set("speed", lua.create_function(move |_, ()| Ok(st.lock().unwrap().speed)).map_err(le)?).map_err(le)?;
+            let st = state.clone();
+            api.set(
+                "set_realtime_voices",
+                lua.create_function(move |_, mask: i64| {
+                    st.lock().unwrap().realtime_voices = (mask as u32) & 0xFF_FFFF;
+                    Ok(())
+                })
+                .map_err(le)?,
+            )
+            .map_err(le)?;
             api.set("version", env!("CARGO_PKG_VERSION")).map_err(le)?;
             let mid = id.to_string();
             api.set(
@@ -321,21 +409,25 @@ impl ScriptHost {
         &self.id
     }
 
+    /// Installs the execution hooks registered so far (and not yet installed).
     pub fn install_hooks(&mut self, bus: &mut Bus) {
         let hooks = self.state.lock().unwrap().exec_hooks.clone();
-        for (addr, key) in hooks {
+        for (addr, key) in hooks.into_iter().skip(self.installed.len()) {
             let lua = self.lua.clone();
             let id = self.id.clone();
             let key = key.clone();
+            let state = self.state.clone();
             bus.add_hook(
                 addr,
                 Box::new(move |cpu, bus| {
                     let frame = 0;
                     let r = lua.scope(|scope| {
-                        let ctx = scope.create_userdata(Ctx { cpu, bus, frame })?;
+                        let ctx = scope.create_userdata(Ctx { cpu, bus: &mut *bus, frame })?;
                         let f: Function = lua.registry_value(&key)?;
                         f.call::<Value>(ctx)
                     });
+                    // A hook may change which voices keep real time.
+                    bus.spu.realtime_voices = state.lock().unwrap().realtime_voices;
                     match r {
                         Ok(Value::Boolean(true)) => HookAction::Redirect,
                         Ok(_) => HookAction::Continue,
@@ -350,16 +442,34 @@ impl ScriptHost {
         }
     }
 
-    pub fn on_frame(&mut self, cpu: &mut Cpu, bus: &mut Bus, frame: u64) -> Result<()> {
+    /// The console speed this script asks for, and its real-time voices.
+    pub fn speed(&self) -> (u32, u32) {
         let st = self.state.lock().unwrap();
-        if st.frame_cbs.is_empty() {
+        (st.speed, st.realtime_voices)
+    }
+
+    pub fn on_frame(&mut self, cpu: &mut Cpu, bus: &mut Bus, frame: u64) -> Result<()> {
+        let r = self.run_frame_callbacks(cpu, bus, frame);
+        // Hooks registered by the callbacks (or earlier) go in now.
+        if self.state.lock().unwrap().exec_hooks.len() > self.installed.len() {
+            self.install_hooks(bus);
+        }
+        r
+    }
+
+    fn run_frame_callbacks(&mut self, cpu: &mut Cpu, bus: &mut Bus, frame: u64) -> Result<()> {
+        let lua = &self.lua;
+        // The callbacks may call back into the API (which locks the state).
+        let fns = {
+            let st = self.state.lock().unwrap();
+            st.frame_cbs.iter().map(|k| lua.registry_value::<Function>(k)).collect::<mlua::Result<Vec<_>>>().map_err(|e| anyhow!("{e}"))?
+        };
+        if fns.is_empty() {
             return Ok(());
         }
-        let lua = &self.lua;
         lua.scope(|scope| {
             let ctx = scope.create_userdata(Ctx { cpu, bus, frame })?;
-            for key in &st.frame_cbs {
-                let f: Function = lua.registry_value(key)?;
+            for f in &fns {
                 f.call::<()>(&ctx)?;
             }
             Ok(())
@@ -368,10 +478,12 @@ impl ScriptHost {
     }
 
     pub fn filter_input(&mut self, buttons: u16) -> Result<u16> {
-        let st = self.state.lock().unwrap();
+        let fns = {
+            let st = self.state.lock().unwrap();
+            st.input_cbs.iter().map(|k| self.lua.registry_value::<Function>(k)).collect::<mlua::Result<Vec<_>>>().map_err(|e| anyhow!("{e}"))?
+        };
         let mut b = buttons;
-        for key in &st.input_cbs {
-            let f: Function = self.lua.registry_value(key).map_err(|e| anyhow!("{e}"))?;
+        for f in &fns {
             let r: Option<u32> = f.call(b).map_err(|e| anyhow!("{e}"))?;
             if let Some(v) = r {
                 b = v as u16;
@@ -414,6 +526,50 @@ mod tests {
         assert!(run("require('missing')").is_err());
         // Binary chunks are refused even when asked for explicitly.
         run("local f, e = load('\\27Lua', 'x', 'b'); assert(f == nil)").unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn speed_find_and_late_hooks() {
+        let d = std::env::temp_dir().join(format!("dwrc-speed-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("main.lua"),
+            r#"
+            assert(dwrc.serial == "SLUS-01032" and dwrc.speed() == 1)
+            hooked = nil
+            dwrc.on_input(function(b)
+              -- Calling back into dwrc from a callback must not deadlock.
+              if b ~= 0 then dwrc.set_speed(dwrc.speed() + 1); dwrc.set_realtime_voices(0x30) end
+              return b
+            end)
+            dwrc.on_frame(function(ctx)
+              if hooked then return end
+              assert(ctx:find("12345678 ????beef", 0x80000000, 0x80000100) == nil)
+              hooked = ctx:find("12345678 ????beef 0000?00?")
+              assert(hooked == 0x80012340, string.format("%x", hooked or 0))
+              dwrc.on_exec(hooked, function(ctx) return false end)
+            end)
+            "#,
+        )
+        .unwrap();
+        let mut host = ScriptHost::load("t", dwrc_disc::GameId::Dw1, "SLUS-01032", &d.join("main.lua"), Default::default(), d.join("data")).unwrap();
+        let mut psx = dwrc_psx::Psx::new(&vec![0u8; 512 * 1024], dwrc_psx::VideoStandard::Ntsc);
+        for (i, w) in [0x1234_5678u32, 0xCAFE_BEEF, 0x0000_1002].iter().enumerate() {
+            psx.bus.ram[0x12340 + i * 4..][..4].copy_from_slice(&w.to_le_bytes());
+        }
+        // A near miss earlier in RAM must not match.
+        psx.bus.ram[0x100..0x108].copy_from_slice(&[0x78, 0x56, 0x34, 0x12, 0xEE, 0xBE, 0xFE, 0xCA]);
+        assert_eq!(host.filter_input(1).unwrap(), 1);
+        assert_eq!(host.filter_input(1).unwrap(), 1);
+        assert_eq!(host.speed(), (3, 0x30));
+        assert!(host.installed.is_empty());
+        host.on_frame(&mut psx.cpu, &mut psx.bus, 1).unwrap();
+        assert_eq!(host.installed, vec![0x8001_2340]);
+        host.on_frame(&mut psx.cpu, &mut psx.bus, 2).unwrap();
+        assert_eq!(host.installed.len(), 1);
+        assert!(parse_pattern("1234567").is_none() && parse_pattern("1234567g").is_none() && parse_pattern("").is_none());
+        assert_eq!(parse_pattern("0c?????? 0000b821"), Some(vec![(0x0C00_0000, 0xFF00_0000), (0x0000_B821, 0xFFFF_FFFF)]));
         let _ = std::fs::remove_dir_all(&d);
     }
 }

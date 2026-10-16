@@ -31,6 +31,8 @@ pub struct EmuStatus {
     pub mod_log: Vec<String>,
     pub pal: bool,
     pub bios: String,
+    /// Speed a mod has set (Fast-Forward): 1 = real time.
+    pub mod_speed: u32,
 }
 
 pub struct Shared {
@@ -128,6 +130,8 @@ fn run(
     let mut fps_t = Instant::now();
     let mut fps_n = 0u32;
     let mut emu_time = Duration::ZERO;
+    let mut speed = 1u32;
+    let mut frame_n = 0u64;
     while !sh.quit.load(Ordering::Relaxed) {
         while let Ok(c) = rx.try_recv() {
             match c {
@@ -145,14 +149,21 @@ fn run(
         let p0 = PadState { buttons: sh.pad[0].load(Ordering::Relaxed) };
         session.set_pad(0, p0);
         session.run_frame();
-        let (w, h) = session.frame_pixels(&mut pixels);
-        {
+        frame_n += 1;
+        if session.speed() != speed {
+            speed = session.speed();
+            sh.status.lock().unwrap().mod_speed = speed;
+        }
+        // Sped up, only every speed-th picture can be seen anyway.
+        if speed == 1 || frame_n % speed as u64 == 0 {
+            let (w, h) = session.frame_pixels(&mut pixels);
             let mut f = sh.frame.lock().unwrap();
             std::mem::swap(&mut f.pixels, &mut pixels);
             f.width = w;
             f.height = h;
             f.seq += 1;
         }
+        // Sped up by a mod, the sound chip still delivers real-time audio.
         samples.clear();
         session.take_audio(&mut samples);
         let ff = sh.fast_forward.load(Ordering::Relaxed);
@@ -178,7 +189,7 @@ fn run(
             target = Instant::now();
             continue;
         }
-        target += ft;
+        target += ft / speed;
         let now = Instant::now();
         if target > now {
             std::thread::sleep(target - now);
