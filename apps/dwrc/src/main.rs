@@ -6,6 +6,7 @@
 
 mod app;
 mod audio;
+mod crt;
 mod emu;
 mod footer;
 mod input;

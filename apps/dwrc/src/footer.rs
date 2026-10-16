@@ -151,7 +151,7 @@ impl Updater {
 
     /// The left part of the Games page footer. Returns a message to show.
     fn footer_left(&mut self, ui: &mut egui::Ui) -> Option<String> {
-        ui.label(RichText::new(format!("Re:Compiled v{RUNNING}")).color(MUTED));
+        ui.label(RichText::new(format!("v{RUNNING}")).color(MUTED));
         let mut msg = None;
         match &self.task {
             Task::Downloading { progress, .. } => {

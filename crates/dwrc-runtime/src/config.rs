@@ -13,6 +13,8 @@ pub enum Filter {
     Nearest,
     /// Smoothed scaling.
     Linear,
+    /// A CRT television: scanlines, phosphor mask, optional curvature.
+    Crt,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -48,11 +50,31 @@ pub struct VideoConfig {
     pub aspect: Aspect,
     pub show_fps: bool,
     pub start_fullscreen: bool,
+    /// Settings for the CRT filter.
+    pub crt: CrtConfig,
 }
 
 impl Default for VideoConfig {
     fn default() -> Self {
-        Self { filter: Filter::Nearest, aspect: Aspect::Tv4x3, show_fps: false, start_fullscreen: false }
+        Self { filter: Filter::Nearest, aspect: Aspect::Tv4x3, show_fps: false, start_fullscreen: false, crt: CrtConfig::default() }
+    }
+}
+
+/// The CRT filter's strengths (0..1).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CrtConfig {
+    /// How visible the gaps between scanlines are.
+    pub scanlines: f32,
+    /// How strong the red/green/blue phosphor stripes are.
+    pub mask: f32,
+    /// How curved the screen is (0 = flat).
+    pub curvature: f32,
+}
+
+impl Default for CrtConfig {
+    fn default() -> Self {
+        Self { scanlines: 0.75, mask: 0.4, curvature: 0.5 }
     }
 }
 

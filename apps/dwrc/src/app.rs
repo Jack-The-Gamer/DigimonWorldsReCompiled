@@ -70,6 +70,11 @@ pub struct App {
     files_hovering: bool,
     open_files: Vec<std::path::PathBuf>,
     updater: crate::footer::Updater,
+    /// The CRT filter (None when OpenGL 3 shaders are unavailable).
+    crt: Option<Arc<crate::crt::Crt>>,
+    crt_error: Option<String>,
+    /// Height of the Games page content last frame (to centre it).
+    library_h: f32,
 }
 
 impl App {
@@ -91,9 +96,20 @@ impl App {
         }
         let mods_ui = ModsUi::new(&paths);
         let updater = crate::footer::Updater::new(&paths, cfg.updates.check_on_start);
+        let (crt, crt_error) = match cc.gl.as_ref().map(|gl| crate::crt::Crt::new(gl)) {
+            Some(Ok(c)) => (Some(Arc::new(c)), None),
+            Some(Err(e)) => {
+                log::warn!("CRT filter unavailable: {e}");
+                (None, Some(e))
+            }
+            None => (None, Some("needs the OpenGL renderer".to_string())),
+        };
         Self {
             mods_ui,
             updater,
+            crt,
+            crt_error,
+            library_h: 0.0,
             files_hovering: false,
             open_files,
             paths,
@@ -283,56 +299,81 @@ impl App {
         }
         egui::CentralPanel::default().frame(egui::Frame::default().fill(Color32::from_rgb(13, 14, 18)).inner_margin(24.0)).show(ctx, |ui| {
             let none_imported = self.lib.games.is_empty();
-            if none_imported {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(4.0);
-                    ui.label(RichText::new("Bring your own discs").size(18.0).strong());
-                    ui.label(
-                        RichText::new(
-                            "Re:Compiled runs your own disc images: the .bin is all it needs (a .cue is optional). \
-                             A BIOS dump is optional too (add one under Settings, BIOS). Nothing is copied or modified. Point it at the folder where you keep them:",
-                        )
-                        .color(MUTED),
-                    );
-                    ui.add_space(6.0);
-                    if ui.add(egui::Button::new(RichText::new("Scan a folder for discs…").size(16.0)).fill(ACCENT_DIM)).clicked()
-                        && self.job.is_none()
-                    {
-                        if let Some(d) = rfd::FileDialog::new().set_title("Folder with your disc images and BIOS").pick_folder() {
-                            self.start_scan(d);
+            let page = ui.available_rect_before_wrap();
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                // Centre everything vertically while it fits (its height is
+                // measured each frame and used on the next).
+                ui.add_space(((page.height() - self.library_h) / 2.0).max(0.0));
+                let top = ui.cursor().top();
+                if none_imported {
+                    ui.vertical_centered(|ui| {
+                        ui.label(RichText::new("Bring your own discs").size(20.0).strong().color(Color32::WHITE));
+                        ui.label(
+                            RichText::new(
+                                "Re:Compiled runs your own disc images: the .bin is all it needs (a .cue is optional). \
+                                 A BIOS dump is optional too (add one under Settings, BIOS). Nothing is copied or modified. Point it at the folder where you keep them:",
+                            )
+                            .color(MUTED),
+                        );
+                        ui.add_space(6.0);
+                        if ui.add(egui::Button::new(RichText::new("Scan a folder for discs…").size(16.0).color(Color32::WHITE)).fill(ACCENT_DIM)).clicked()
+                            && self.job.is_none()
+                        {
+                            if let Some(d) = rfd::FileDialog::new().set_title("Folder with your disc images and BIOS").pick_folder() {
+                                self.start_scan(d);
+                            }
                         }
-                    }
-                    ui.add_space(12.0);
-                });
-            }
-            let avail = ui.available_width();
-            let gap = 18.0;
-            let card_w = ((avail - gap * 2.0) / 3.0).clamp(220.0, 420.0);
-            let cols = if avail >= card_w * 3.0 + gap * 2.0 { 3 } else { 1 };
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                if cols == 3 {
+                        ui.add_space(18.0);
+                    });
+                }
+                // Cards: three across, as large as the page allows (by width
+                // and by height), centred; one column on narrow windows.
+                let gap = 24.0;
+                let avail = ui.available_width();
+                let used_above = ui.cursor().top() - top;
+                let below = if none_imported { 0.0 } else { 70.0 };
+                let height_budget = page.height() - used_above - below;
+                let card_for = |w: f32| -> f32 {
+                    let k = (w / 400.0).clamp(1.0, 1.3);
+                    28.0 + (w - 28.0) * 0.75 + 150.0 * k
+                };
+                let mut card_w = ((avail - gap * 2.0) / 3.0).min(680.0);
+                while card_w > 260.0 && card_for(card_w) > height_budget {
+                    card_w -= 10.0;
+                }
+                if card_w >= 240.0 {
                     ui.horizontal_top(|ui| {
                         ui.spacing_mut().item_spacing.x = gap;
+                        ui.add_space(((avail - card_w * 3.0 - gap * 2.0) / 2.0).max(0.0));
                         for g in GameId::ALL {
                             self.game_card(ui, ctx, g, card_w);
                         }
                     });
                 } else {
+                    let w = avail.min(480.0);
                     for g in GameId::ALL {
-                        self.game_card(ui, ctx, g, avail.min(520.0));
+                        ui.horizontal_top(|ui| {
+                            ui.add_space(((avail - w) / 2.0).max(0.0));
+                            self.game_card(ui, ctx, g, w);
+                        });
                         ui.add_space(gap);
                     }
                 }
                 if !none_imported {
-                    ui.add_space(16.0);
-                    ui.horizontal(|ui| {
-                        if ui.button("Scan a folder…").clicked() && self.job.is_none() {
+                    ui.add_space(20.0);
+                    ui.vertical_centered(|ui| {
+                        if ui.button("Scan a folder for discs…").clicked() && self.job.is_none() {
                             if let Some(d) = rfd::FileDialog::new().pick_folder() {
                                 self.start_scan(d);
                             }
                         }
                         ui.label(RichText::new(format!("Data folder: {}", self.paths.root.display())).color(MUTED).small());
                     });
+                }
+                let h = ui.cursor().top() - top;
+                if (h - self.library_h).abs() > 0.5 {
+                    self.library_h = h;
+                    ctx.request_repaint();
                 }
             });
         });
@@ -346,9 +387,12 @@ impl App {
             let env = crate::mods_page::Env { cfg: &mut self.cfg, paths: &self.paths, lib: &self.lib, running: None };
             self.mods_ui.active_count(&env, g)
         };
+        // Text and buttons grow a little with the card.
+        let k = (w / 400.0).clamp(1.0, 1.3);
         egui::Frame::default().fill(CARD_BG).corner_radius(10.0).inner_margin(14.0).show(ui, |ui| {
           ui.vertical(|ui| {
             ui.set_width(w - 28.0);
+            ui.spacing_mut().item_spacing = Vec2::new(8.0 * k, 7.0);
             // Artwork: last-played screenshot or a placeholder.
             let art_h = (w - 28.0) * 0.75;
             let (rect, _) = ui.allocate_exact_size(Vec2::new(w - 28.0, art_h), Sense::hover());
@@ -367,18 +411,18 @@ impl App {
                     rect.center_bottom() - Vec2::new(0.0, 16.0),
                     Align2::CENTER_CENTER,
                     "plays from your disc",
-                    egui::FontId::proportional(13.0),
+                    egui::FontId::proportional(13.0 * k),
                     MUTED,
                 );
             }
             ui.add_space(8.0);
-            ui.label(RichText::new(g.title()).size(19.0).strong().color(Color32::WHITE));
+            ui.label(RichText::new(g.title()).size(20.0 * k).strong().color(Color32::WHITE));
             match &entry {
                 Some(e) => {
-                    ui.label(RichText::new(format!("{}  ·  {}", e.ident.title, e.ident.serial)).color(MUTED));
+                    ui.label(RichText::new(format!("{}  ·  {}", e.ident.title, e.ident.serial)).size(13.5 * k).color(MUTED));
                 }
                 None => {
-                    ui.label(RichText::new("Not imported yet").color(MUTED));
+                    ui.label(RichText::new("Not imported yet").size(13.5 * k).color(MUTED));
                 }
             }
             let (chip, col) = match (&status, &entry) {
@@ -388,20 +432,21 @@ impl App {
                 (DiscStatus::Changed, _) => ("✖ Disc image changed", BAD),
                 _ => ("Import your disc to play", MUTED),
             };
-            ui.label(RichText::new(chip).color(col));
-            ui.add_space(6.0);
+            ui.label(RichText::new(chip).size(13.5 * k).color(col));
+            ui.add_space(6.0 * k);
             ui.horizontal(|ui| {
                 let can_play = status == DiscStatus::Ready;
                 let play = ui.add_enabled(
                     can_play,
-                    egui::Button::new(RichText::new("▶  Play").size(16.0).strong().color(Color32::BLACK))
+                    egui::Button::new(RichText::new("▶  Play").size(16.0 * k).strong().color(Color32::BLACK))
                         .fill(ACCENT)
-                        .min_size(Vec2::new(100.0, 32.0)),
+                        .min_size(Vec2::new(100.0 * k, 32.0 * k)),
                 );
+                let small = |t: String| egui::Button::new(RichText::new(t).size(14.0 * k)).min_size(Vec2::new(0.0, 32.0 * k));
                 if play.clicked() {
                     self.start_game(g);
                 }
-                if ui.button(if entry.is_some() { "Re-import…" } else { "Import disc…" }).clicked() && self.job.is_none() {
+                if ui.add(small(if entry.is_some() { "Re-import…" } else { "Import disc…" }.to_string())).clicked() && self.job.is_none() {
                     if let Some(p) = rfd::FileDialog::new()
                         .set_title(format!("Select your {} disc image", g.title()))
                         .add_filter("Disc image", &["cue", "bin", "CUE", "BIN"])
@@ -411,7 +456,7 @@ impl App {
                     }
                 }
                 let label = if enabled_mods > 0 { format!("Mods ({enabled_mods})") } else { "Mods".to_string() };
-                if ui.button(label).on_hover_text(format!("Mods that load for {}", g.title())).clicked() {
+                if ui.add(small(label)).on_hover_text(format!("Mods that load for {}", g.title())).clicked() {
                     self.mods_ui.game_filter = Some(g);
                     self.mods_ui.search.clear();
                     self.mods_ui.tab = Tab::Installed;
@@ -433,7 +478,38 @@ impl App {
                         ui.label("Scaling filter");
                         changed |= ui.radio_value(&mut self.cfg.video.filter, Filter::Nearest, "Sharp (original pixels)").changed();
                         changed |= ui.radio_value(&mut self.cfg.video.filter, Filter::Linear, "Smooth").changed();
+                        let crt_ok = self.crt.is_some();
+                        let r = ui.add_enabled(crt_ok, egui::RadioButton::new(self.cfg.video.filter == Filter::Crt, "CRT"));
+                        let r = match &self.crt_error {
+                            Some(e) => r.on_disabled_hover_text(format!("The CRT filter is not available on this computer: {e}")),
+                            None => r.on_hover_text("Scanlines and phosphors, like a CRT television"),
+                        };
+                        if r.clicked() {
+                            self.cfg.video.filter = Filter::Crt;
+                            changed = true;
+                        }
                     });
+                    if self.cfg.video.filter == Filter::Crt {
+                        let crt = &mut self.cfg.video.crt;
+                        egui::Grid::new("crt").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                            for (label, value, tip) in [
+                                ("Scanlines", &mut crt.scanlines, "How dark the gaps between the picture's lines are"),
+                                ("Phosphor mask", &mut crt.mask, "How visible the red, green and blue stripes are"),
+                                ("Screen curvature", &mut crt.curvature, "0 is a flat screen"),
+                            ] {
+                                ui.label(label).on_hover_text(tip);
+                                changed |= ui.add(egui::Slider::new(value, 0.0..=1.0).show_value(false)).changed();
+                                ui.end_row();
+                            }
+                        });
+                        if ui.button("Reset CRT settings").clicked() {
+                            self.cfg.video.crt = Default::default();
+                            changed = true;
+                        }
+                        if self.crt.is_none() {
+                            ui.label(RichText::new("The CRT filter is not available on this computer, so Smooth is used.").color(WARN).small());
+                        }
+                    }
                     ui.horizontal(|ui| {
                         ui.label("Aspect ratio");
                         changed |= ui.radio_value(&mut self.cfg.video.aspect, Aspect::Tv4x3, "4:3 TV").changed();
@@ -662,10 +738,13 @@ impl App {
                 for p in &f.pixels {
                     rgba.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, *p as u8, 255]);
                 }
+                if let (Filter::Crt, Some(crt)) = (self.cfg.video.filter, &self.crt) {
+                    crt.set_frame(f.seq, f.width, f.height, &rgba);
+                }
                 let img = egui::ColorImage::from_rgba_unmultiplied([f.width as usize, f.height as usize], &rgba);
                 let opts = match self.cfg.video.filter {
                     Filter::Nearest => TextureOptions::NEAREST,
-                    Filter::Linear => TextureOptions::LINEAR,
+                    Filter::Linear | Filter::Crt => TextureOptions::LINEAR,
                 };
                 match &mut self.game_tex {
                     Some(t) => t.set(img, opts),
@@ -705,7 +784,18 @@ impl App {
                     }
                 };
                 let rect = egui::Rect::from_center_size(avail.center(), size);
-                ui.painter().image(t.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                match (self.cfg.video.filter, &self.crt) {
+                    (Filter::Crt, Some(crt)) => {
+                        let crt = crt.clone();
+                        let c = self.cfg.video.crt;
+                        let params = crate::crt::Params { scanlines: c.scanlines, mask: c.mask, curvature: c.curvature };
+                        let cb = eframe::egui_glow::CallbackFn::new(move |_info, painter| crt.paint(painter.gl(), params));
+                        ui.painter().add(egui::PaintCallback { rect, callback: Arc::new(cb) });
+                    }
+                    _ => {
+                        ui.painter().image(t.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                    }
+                }
             } else {
                 ui.painter().text(avail.center(), Align2::CENTER_CENTER, "Starting…", egui::FontId::proportional(20.0), MUTED);
             }
@@ -983,6 +1073,10 @@ fn pretty_button(b: Button) -> &'static str {
 }
 
 fn style(ctx: &egui::Context) {
+    // Always dark. egui otherwise follows the system theme, and with a light
+    // Windows/macOS theme it drew dark text and light buttons on our dark
+    // panels.
+    ctx.set_theme(egui::ThemePreference::Dark);
     let mut v = egui::Visuals::dark();
     v.panel_fill = PANEL_BG;
     v.window_fill = Color32::from_rgb(24, 27, 33);
@@ -991,8 +1085,9 @@ fn style(ctx: &egui::Context) {
     v.hyperlink_color = BLUE;
     v.extreme_bg_color = Color32::from_rgb(30, 34, 42);
     v.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, ACCENT);
-    ctx.set_visuals(v);
-    ctx.style_mut(|s| {
+    ctx.set_visuals_of(egui::Theme::Light, v.clone());
+    ctx.set_visuals_of(egui::Theme::Dark, v);
+    ctx.all_styles_mut(|s| {
         s.spacing.button_padding = Vec2::new(10.0, 5.0);
         s.spacing.item_spacing = Vec2::new(8.0, 7.0);
     });
