@@ -15,7 +15,7 @@ Re:Compiled translates the games' own MIPS code (read from *your* discs) into na
 
 ## Playing
 
-1. **Get the program.** Download a release zip for your OS (see *Releases*), or build it yourself (see [Building](#building)). On Windows you can also double-click `Play-Windows.bat` in a source checkout: it builds the program the first time (if Rust is installed) and starts it.
+1. **Get the program.** Download a release zip for your OS from [Releases](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled/releases), or build it yourself (see [Building](#building)). On Windows you can also double-click `Play-Windows.bat` in a source checkout: it builds whatever changed (if Rust is installed) and starts the program.
 2. **Point it at your files.** On first launch, click **Scan a folder for discs & BIOS…** and pick the folder holding your `.cue`/`.bin` images and BIOS file. Each disc is identified and checked against known-good dumps (SHA-1). You can also import discs and BIOS files individually.
 3. **Press Play.**
 
@@ -59,7 +59,7 @@ Other dumps of these releases are accepted with an "unverified" note. BIOS image
 Mods work the way they do in Gen1Recomp. The launcher has a **Mods** page next to **Games** and **Settings**:
 
 * **Installed** — every mod in one shared load order, switched on per game (DW1 / DW2 / DW3), with options, update checks, a version picker (update or roll back), uninstall and a safe mode.
-* **Find mods** — browse mod indexes hosted on GitHub and install with one click. The [Re:Compiled index](https://github.com/DigimonWorldsReCompiled/mod-index) is built in; add others with **Indexes…** (`owner/repo` or a link).
+* **Find mods** — browse mod indexes hosted on GitHub and install with one click. The [Re:Compiled index](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index) is built in; add others with **Indexes…** (`owner/repo` or a link).
 * **Import .zip…** — install a mod you downloaded, or just drop the `.zip` on the window.
 
 Mods can replace files on the (virtual) disc, patch memory, and run Lua scripts with hooks on any code address, every frame and on controller input, with their own options and save data. Scripts run in a sandbox with no file, network or OS access. Authors publish versions as GitHub Releases, and players are offered updates automatically. **F10** in game switches the running game's mods on and off.
@@ -117,7 +117,7 @@ crates/dwrc-runtime   library, import, settings, sessions
 apps/dwrc             the launcher / player (egui)
 apps/dwrc-cli         developer command-line tools
 mods/                 bundled example mods
-mod-index/            the mod index (its own repository: DigimonWorldsReCompiled/mod-index)
+mod-index/            the mod index (its own repository: Jack-The-Gamer/DigimonWorldsReCompiled-mod-index)
 docs/                 documentation
 ```
 

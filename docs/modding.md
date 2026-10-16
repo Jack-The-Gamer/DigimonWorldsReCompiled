@@ -13,7 +13,7 @@ Releases.
   mod's name for its details and options; **More** has *Move to top/bottom*,
   *Versions…*, *Open folder*, *Reset options* and *Uninstall…*.
 * **Find mods** browses the mod indexes: the built-in
-  [Re:Compiled index](https://github.com/DigimonWorldsReCompiled/mod-index)
+  [Re:Compiled index](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index)
   plus any you add with **Indexes…** (paste `owner/repo`, the repository's
   GitHub link, or a feed URL). Filter by game and category, sort by name,
   downloads, trending or last update, open **Details** for the full
@@ -107,7 +107,7 @@ Dependencies are loaded before the mods that need them.
    the mod inside). `dwrc-cli mod pack <folder>` builds that file;
    [`templates/release-mod.yml`](templates/release-mod.yml) is a GitHub
    Actions workflow that builds and publishes it whenever you push a tag.
-3. List it in the [mod index](https://github.com/DigimonWorldsReCompiled/mod-index)
+3. List it in the [mod index](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index)
    with a pull request adding `mods/<You>@<id>/meta.json` and
    `description.md`. The index follows your releases nightly, so new versions
    need no further pull requests.

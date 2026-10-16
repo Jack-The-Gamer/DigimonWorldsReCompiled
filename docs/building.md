@@ -5,7 +5,7 @@ Re:Compiled is a standard Cargo workspace. You need **Rust 1.84 or newer** (inst
 ## Windows
 
 1. Run `rustup-init.exe`. When it asks, let it install the Visual Studio C++ build tools.
-2. Double-click `Play-Windows.bat` — it builds a release binary the first time and starts the launcher. Or, from a terminal: `cargo build --release`.
+2. Double-click `Play-Windows.bat` — it builds a release binary (the first build takes a few minutes; later ones only rebuild what changed) and starts the launcher. Or, from a terminal: `cargo build --release`.
 
 ## Linux
 

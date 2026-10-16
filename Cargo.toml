@@ -17,7 +17,7 @@ version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["Digimon Worlds Re:Compiled contributors"]
-repository = "https://github.com/DigimonWorldsReCompiled/DigimonWorldsReCompiled"
+repository = "https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled"
 rust-version = "1.85"
 
 [workspace.dependencies]

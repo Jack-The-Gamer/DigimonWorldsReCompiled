@@ -22,7 +22,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 /// The Re:Compiled community index, listed for every player.
-pub const BUILTIN_INDEX: &str = "DigimonWorldsReCompiled/mod-index";
+pub const BUILTIN_INDEX: &str = "Jack-The-Gamer/DigimonWorldsReCompiled-mod-index";
 
 /// The feed version this build reads.
 pub const SCHEMA_VERSION: u64 = 1;
@@ -429,7 +429,7 @@ mod tests {
         let s = resolve_source("http://127.0.0.1:8080").unwrap();
         assert_eq!(s.feed, "http://127.0.0.1:8080/data/index.json");
         assert!(resolve_source("not a url at all").is_err());
-        let all = sources(&["DigimonWorldsReCompiled/mod-index".into(), "a/b".into(), "https://github.com/a/b".into()]);
+        let all = sources(&[BUILTIN_INDEX.into(), "a/b".into(), "https://github.com/a/b".into()]);
         assert_eq!(all.len(), 2);
         assert!(all[0].builtin && !all[1].builtin);
         assert_eq!(join_url("https://h/x/", "data/mods/a/t.png").unwrap(), "https://h/x/data/mods/a/t.png");
