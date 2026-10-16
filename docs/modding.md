@@ -111,7 +111,7 @@ come from `mod.toml`, so there is no `meta.json` to keep in step. To release a
 version, bump `version` in `mod.toml` and get it onto the index's `main`
 branch: the index checks the mod, publishes the release
 `<id>-v<version>` with `<id>-<version>.zip` (its notes are the message of the
-commit that changed the mod) and lists it. [Turbo Text](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index/tree/HEAD/mods/Jack-The-Gamer@turbo-text)
+commit that changed the mod) and lists it. [Turbo](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index/tree/HEAD/mods/Jack-The-Gamer@turbo)
 is published this way. Details: the index's README, "Hosting a mod here".
 
 **In your own repository.**
@@ -191,9 +191,11 @@ dwrc.on_exec(0x80045678, function(ctx)
 end)
 ```
 
-### Example: Turbo Text
+### Example: changing the controller (a simple turbo)
 
-The full mod, with its options, is [hosted in the mod index](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index/tree/HEAD/mods/Jack-The-Gamer@turbo-text); this is its core:
+While the turbo button is held, Cross is pressed for two frames and released
+for two. The [Turbo mod](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index/tree/HEAD/mods/Jack-The-Gamer@turbo) in the index is the full version: hold R2,
+then any one or two buttons turbo for as long as they are held.
 
 ```lua
 local hold, tap = dwrc.buttons[dwrc.options.hold], dwrc.buttons.Cross
