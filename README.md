@@ -63,7 +63,7 @@ Without a BIOS dump, games start with the built-in **OpenBIOS** (open source, MI
 The mod index lives in its own repository, [Jack-The-Gamer/DigimonWorldsReCompiled-mod-index](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index).
 
 
-Mods work the way they do in Gen1Recomp. The launcher has a **Mods** page next to **Games** and **Settings**:
+The launcher has a **Mods** page next to **Games** and **Settings**:
 
 * **Installed** — every mod in one shared load order, switched on per game (DW1 / DW2 / DW3), with options, update checks, a version picker (update or roll back), uninstall and a safe mode.
 * **Find mods** — browse mod indexes hosted on GitHub and install with one click. The [Re:Compiled index](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index) is built in; add others with **Indexes…** (`owner/repo` or a link).
