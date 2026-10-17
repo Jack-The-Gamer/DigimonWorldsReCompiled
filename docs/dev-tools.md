@@ -46,6 +46,7 @@ frame number, and `--mod` folders run as usual.
 | `wait N` | run N frames with nothing pressed |
 | `shot FILE.png` | save the current picture |
 | `ram FILE` | write main RAM |
+| `vram FILE` | write video RAM (1024×512 16-bit pixels, little-endian, row by row) |
 | `peek ADDR [N]` | print N bytes of memory in hex |
 | `poke8` / `poke16` / `poke32 ADDR VALUE` | write memory |
 | `frame` | print the frame number |

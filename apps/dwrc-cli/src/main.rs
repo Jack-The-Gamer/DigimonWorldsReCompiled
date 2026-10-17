@@ -370,6 +370,11 @@ fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button
                 std::fs::write(path, &psx.bus.ram[..0x20_0000])?;
                 Ok(path.to_string())
             }
+            ["vram", path] => {
+                let bytes: Vec<u8> = psx.bus.gpu.vram.iter().flat_map(|p| p.to_le_bytes()).collect();
+                std::fs::write(path, bytes)?;
+                Ok(path.to_string())
+            }
             ["peek", a, rest @ ..] => {
                 let a = num(a)?;
                 let n = rest.first().map(|n| num(n)).transpose()?.unwrap_or(16);
