@@ -32,6 +32,27 @@ Build with `cargo build --release -p dwrc-cli`; the tool is `target/release/dwrc
 | `--trace-bios` | list the BIOS functions the game calls (table, number, count, first frame) |
 | `--dump-entry` | print the hardware state when the game's entry point is reached |
 | `--pcs` | sample where the CPU spends its time at the end of the run |
+| `--dump-ram FILE` | write main RAM (2 MiB from `0x80000000`) at the end of the run |
+| `--serve` | keep the console running under commands read from stdin (below) |
+
+**`--serve`** is for exploring a game step by step without rebooting it each
+time (to reach a place, then try things there). Each line on stdin is one
+command, answered with a line starting `ok` or `err`; `--input` still applies by
+frame number, and `--mod` folders run as usual.
+
+| | |
+|---|---|
+| `press BTN[+BTN…] N` | hold buttons for N frames, e.g. `press left+down 30` |
+| `wait N` | run N frames with nothing pressed |
+| `shot FILE.png` | save the current picture |
+| `ram FILE` | write main RAM |
+| `peek ADDR [N]` | print N bytes of memory in hex |
+| `poke8` / `poke16` / `poke32 ADDR VALUE` | write memory |
+| `frame` | print the frame number |
+| `quit` | stop |
+
+Feed it from a named pipe to drive it from a script, e.g.
+`mkfifo in; dwrc-cli run game.cue --fast --engine recomp --card1 my.mcd --serve < in > out.log &`.
 
 `DWRC_GITHUB_API=<url>` points update checks at another GitHub API endpoint (for testing against a local server).
 

@@ -35,7 +35,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         _ => bail!(
-            "commands:\n  inspect <cue>\n  extract <cue> <path> <out>\n  run <bin|cue> [--bios <bin>] [--frames N] [--shots dir] [--every K] [--fast] [--input frame:button:len,...] [--mod <folder>]... [--card1 F.mcd] [--trace-bios]\n  disasm <exe> <addr> <count>\n  mod validate <folder>              check a mod folder\n  mod pack <folder> [--out <dir>]    build <id>-<version>.zip for a GitHub release\n  mod install <zip> [--data <dir>] [--replace]\n  mod list [--data <dir>]\n  mod index <owner/repo | URL>       read a mod index feed\n  mod releases <owner/repo> <id>     list a mod's installable GitHub releases"
+            "commands:\n  inspect <cue>\n  extract <cue> <path> <out>\n  run <bin|cue> [--bios <bin>] [--frames N] [--shots dir] [--every K] [--fast] [--input frame:button:len,...] [--mod <folder>]... [--card1 F.mcd] [--trace-bios] [--dump-ram F] [--serve]\n  disasm <exe> <addr> <count>\n  mod validate <folder>              check a mod folder\n  mod pack <folder> [--out <dir>]    build <id>-<version>.zip for a GitHub release\n  mod install <zip> [--data <dir>] [--replace]\n  mod list [--data <dir>]\n  mod index <owner/repo | URL>       read a mod index feed\n  mod releases <owner/repo> <id>     list a mod's installable GitHub releases"
         ),
     }
 }
@@ -202,6 +202,9 @@ fn run(args: &[String]) -> Result<()> {
     if let Some(d) = &shots {
         std::fs::create_dir_all(d)?;
     }
+    if flag(args, "--serve") {
+        return serve(&mut psx, &mut mod_rt, &script);
+    }
     let t0 = Instant::now();
     let mut buf = Vec::new();
     let mut audio = Vec::new();
@@ -281,10 +284,121 @@ fn run(args: &[String]) -> Result<()> {
     if let Some(dir) = &shots {
         save_vram(&dir.join("vram.png"), &psx)?;
     }
+    // --dump-ram <file>: main RAM (2 MiB, from 0x80000000) at the end of the run.
+    if let Some(p) = opt(args, "--dump-ram") {
+        std::fs::write(p, &psx.bus.ram[..0x20_0000])?;
+        println!("RAM written to {p}");
+    }
     if flag(args, "--tty") && !psx.bus.tty.is_empty() {
         println!("--- TTY ---\n{}", psx.bus.tty);
     }
     println!("engine: {} {}", psx.engine_name(), psx.engine_report());
+    Ok(())
+}
+
+/// `run … --serve`: keeps the console running under commands read from
+/// stdin, one per line (for exploring a game step by step without
+/// rebooting it). The `--input` script still applies, by frame number.
+///
+/// ```text
+/// press <btn>[+<btn>…] <frames>   hold buttons (cross, start, l1, up, …)
+/// wait <frames>                    run with nothing pressed
+/// shot <file.png>                  save the current picture
+/// ram <file>                       write main RAM (2 MiB from 0x80000000)
+/// peek <addr> [bytes]              print memory in hex
+/// poke8|poke16|poke32 <addr> <value>
+/// frame                            print the frame number
+/// quit
+/// ```
+/// Every command answers with a line starting `ok` or `err`.
+fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button, u64)]) -> Result<()> {
+    use std::io::{BufRead, Write};
+    let num = |s: &str| -> Result<u32> {
+        let s = s.trim();
+        Ok(match s.strip_prefix("0x") {
+            Some(h) => u32::from_str_radix(h, 16)?,
+            None => s.parse()?,
+        })
+    };
+    let mut frame = 0u64;
+    let mut audio = Vec::new();
+    let mut step = |psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, held: &[Button], frame: &mut u64| {
+        *frame += 1;
+        let mut state = dwrc_psx::PadState::default();
+        for b in held {
+            state.set(*b, true);
+        }
+        for (sf, b, d) in script {
+            if *frame >= *sf && *frame < sf + d {
+                state.set(*b, true);
+            }
+        }
+        state.buttons = mods.filter_input(state.buttons);
+        psx.bus.sio.pads[0].state = state;
+        mods.apply_speed(psx);
+        psx.run_frame();
+        mods.on_frame(psx, *frame);
+        audio.clear();
+        psx.bus.spu.take_output(&mut audio);
+    };
+    let stdin = std::io::stdin();
+    let mut out = std::io::stdout();
+    for line in stdin.lock().lines() {
+        let line = line?;
+        let w: Vec<&str> = line.split_whitespace().collect();
+        let r: Result<String> = (|| match w.as_slice() {
+            ["press", btns, n] => {
+                let held = btns.split('+').map(|b| parse_button(b).context("unknown button")).collect::<Result<Vec<_>>>()?;
+                for _ in 0..num(n)? {
+                    step(psx, mods, &held, &mut frame);
+                }
+                Ok(format!("frame {frame}"))
+            }
+            ["wait", n] => {
+                for _ in 0..num(n)? {
+                    step(psx, mods, &[], &mut frame);
+                }
+                Ok(format!("frame {frame}"))
+            }
+            ["shot", path] => {
+                let mut buf = Vec::new();
+                let (wd, ht) = psx.bus.gpu.render_display(&mut buf);
+                save_png(Path::new(path), wd, ht, &buf)?;
+                Ok(format!("{path} {wd}x{ht}"))
+            }
+            ["ram", path] => {
+                std::fs::write(path, &psx.bus.ram[..0x20_0000])?;
+                Ok(path.to_string())
+            }
+            ["peek", a, rest @ ..] => {
+                let a = num(a)?;
+                let n = rest.first().map(|n| num(n)).transpose()?.unwrap_or(16);
+                Ok((0..n).map(|i| format!("{:02x}", psx.bus.peek8(a + i))).collect::<Vec<_>>().join(" "))
+            }
+            ["poke8", a, v] => {
+                psx.bus.poke8(num(a)?, num(v)? as u8);
+                Ok(String::new())
+            }
+            ["poke16", a, v] => {
+                psx.bus.poke16(num(a)?, num(v)? as u16);
+                Ok(String::new())
+            }
+            ["poke32", a, v] => {
+                psx.bus.poke32(num(a)?, num(v)?);
+                Ok(String::new())
+            }
+            ["frame"] => Ok(format!("frame {frame}")),
+            ["quit"] => Err(anyhow::anyhow!("quit")),
+            [] => Ok(String::new()),
+            _ => Err(anyhow::anyhow!("unknown command")),
+        })();
+        match r {
+            Ok(s) => writeln!(out, "ok {s}")?,
+            Err(e) if e.to_string() == "quit" => break,
+            Err(e) => writeln!(out, "err {e:#}")?,
+        }
+        out.flush()?;
+    }
     Ok(())
 }
 
