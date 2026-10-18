@@ -1,6 +1,6 @@
 # Building
 
-Re:Compiled is a standard Cargo workspace. You need **Rust 1.84 or newer** (install from <https://rustup.rs>).
+Re:Compiled is a standard Cargo workspace. You need **Rust 1.85 or newer** (install from <https://rustup.rs>).
 
 ## Windows
 

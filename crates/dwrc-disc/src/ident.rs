@@ -85,9 +85,11 @@ pub struct KnownDump {
 
 pub const RELEASES: &[KnownRelease] = &[
     KnownRelease { game: GameId::Dw1, serial: "SLUS-01032", title: "Digimon World (USA)", region: Region::NtscU },
+    KnownRelease { game: GameId::Dw1, serial: "SLPS-01797", title: "Digimon World (Japan)", region: Region::NtscJ },
     KnownRelease { game: GameId::Dw2, serial: "SLUS-01193", title: "Digimon World 2 (USA)", region: Region::NtscU },
     KnownRelease { game: GameId::Dw3, serial: "SLUS-01436", title: "Digimon World 3 (USA)", region: Region::NtscU },
     KnownRelease { game: GameId::Dw3, serial: "SLES-03936", title: "Digimon World 2003 (Europe)", region: Region::Pal },
+    KnownRelease { game: GameId::Dw3, serial: "SLPS-03446", title: "Digimon World 3 (Japan)", region: Region::NtscJ },
 ];
 
 /// Full-image hashes of dumps that have been verified end-to-end with

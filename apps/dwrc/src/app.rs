@@ -8,6 +8,7 @@ use crate::mods_page::{ModsUi, Tab};
 use dwrc_psx::Button;
 use dwrc_runtime::bios::region_label;
 use dwrc_runtime::config::{Aspect, BiosMode, EngineKind, Filter};
+use dwrc_runtime::library::GameEntry;
 use dwrc_runtime::{Config, DiscStatus, Library, Paths};
 use eframe::egui::{self, Align, Align2, Color32, Key, Layout, RichText, Sense, Stroke, TextureHandle, TextureOptions, Vec2};
 use std::collections::HashMap;
@@ -443,9 +444,7 @@ impl App {
             ui.add_space(8.0);
             ui.label(RichText::new(g.title()).size(20.0 * k).strong().color(Color32::WHITE));
             match &entry {
-                Some(e) => {
-                    ui.label(RichText::new(format!("{}  ·  {}", e.ident.title, e.ident.serial)).size(13.5 * k).color(MUTED));
-                }
+                Some(e) => self.disc_picker(ui, ctx, g, e, w - 28.0, k),
                 None => {
                     ui.label(RichText::new("Not imported yet").size(13.5 * k).color(MUTED));
                 }
@@ -490,6 +489,141 @@ impl App {
             });
           });
         });
+    }
+
+    /// The line under a game's title naming the disc that plays (release and
+    /// serial). Clicking it unrolls a list of every disc imported for the
+    /// game (other regions, other copies) to choose another.
+    fn disc_picker(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, g: GameId, chosen: &GameEntry, list_w: f32, k: f32) {
+        let open_id = egui::Id::new(("disc-list", g.slug()));
+        let mut open = ctx.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
+        let count = self.lib.discs_for(g).len();
+        let arrow = if count < 2 { "" } else if open { "  ⏶" } else { "  ⏷" };
+        // A highlight behind the line while it is hovered or open, painted
+        // beneath the text (its slot is reserved first).
+        let bg = ui.painter().add(egui::Shape::Noop);
+        let line = format!("{}  ·  {}{arrow}", chosen.ident.title, chosen.ident.serial);
+        let r = ui.add(egui::Label::new(RichText::new(line).size(13.5 * k).color(MUTED)).sense(Sense::click()).selectable(false));
+        if r.hovered() || open {
+            ui.painter().set(bg, egui::Shape::rect_filled(r.rect.expand2(Vec2::new(5.0, 2.0)), 4.0, Color32::from_gray(38)));
+        }
+        let r = r.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(if count < 2 {
+            "The disc this game plays. Import another region or copy to choose between them here.".to_string()
+        } else {
+            format!("Choose which of your {count} discs plays")
+        });
+        if r.clicked() {
+            open = !open;
+        }
+        let t = ctx.animate_bool_with_time(open_id.with("unroll"), open, 0.16);
+        let mut pick = None;
+        let mut forget = None;
+        if t > 0.0 {
+            let discs: Vec<GameEntry> = self.lib.discs_for(g).into_iter().cloned().collect();
+            let height_id = open_id.with("height");
+            let full_h: f32 = ctx.data(|d| d.get_temp(height_id)).unwrap_or(0.0);
+            let area = egui::Area::new(open_id.with("area")).order(egui::Order::Foreground).fixed_pos(r.rect.left_bottom() + Vec2::new(-6.0, 6.0)).show(ctx, |ui| {
+                // Unrolls: only the top `t` of the list shows while animating.
+                let shown = egui::Rect::from_min_size(ui.max_rect().min - Vec2::splat(1.0), Vec2::new(list_w + 14.0, full_h * t + 2.0));
+                ui.set_clip_rect(shown.intersect(ui.clip_rect()));
+                egui::Frame::default()
+                    .fill(Color32::from_rgb(22, 25, 32))
+                    .stroke(Stroke::new(1.0_f32, Color32::from_gray(60)))
+                    .corner_radius(8.0)
+                    .inner_margin(6.0)
+                    .show(ui, |ui| {
+                        ui.set_width(list_w);
+                        ui.spacing_mut().item_spacing.y = 4.0;
+                        for (i, e) in discs.iter().enumerate() {
+                            let is_chosen = e.bin == chosen.bin;
+                            let status = dwrc_runtime::library::disc_status(e);
+                            let playable = status == DiscStatus::Ready;
+                            let (chip, col) = match status {
+                                DiscStatus::Ready if e.verified => ("✔ Verified dump", OK),
+                                DiscStatus::Ready => ("⚠ Unverified dump", WARN),
+                                DiscStatus::Changed => ("✖ Changed since import", BAD),
+                                _ => ("✖ Missing", BAD),
+                            };
+                            let row = ui.scope_builder(egui::UiBuilder::new().id_salt(("disc", g.slug(), i)).sense(Sense::click()), |ui| {
+                                ui.style_mut().interaction.selectable_labels = false;
+                                let hover = ui.response().contains_pointer() && playable && !is_chosen;
+                                let fill = if is_chosen {
+                                    ACCENT_DIM
+                                } else if hover {
+                                    Color32::from_gray(40)
+                                } else {
+                                    Color32::TRANSPARENT
+                                };
+                                egui::Frame::default().fill(fill).corner_radius(6.0).inner_margin(egui::Margin::symmetric(8, 5)).show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.horizontal(|ui| {
+                                        // The text keeps to the card's width (long file names
+                                        // are shortened), leaving room on the right.
+                                        let text_w = ui.available_width() - 44.0 * k;
+                                        ui.vertical(|ui| {
+                                            ui.set_width(text_w);
+                                            let name = RichText::new(format!("{}  ·  {}", e.ident.title, e.ident.serial)).size(13.5 * k);
+                                            let name = if is_chosen { name.strong().color(Color32::WHITE) } else { name.color(Color32::from_gray(210)) };
+                                            ui.add(egui::Label::new(name).truncate());
+                                            ui.horizontal(|ui| {
+                                                ui.label(RichText::new(chip).size(12.0 * k).color(col));
+                                                ui.add(egui::Label::new(RichText::new(e.file_name()).size(12.0 * k).color(MUTED)).truncate())
+                                                    .on_hover_text(e.bin.display().to_string());
+                                            });
+                                        });
+                                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                            if is_chosen {
+                                                ui.label(RichText::new("Plays").size(12.0 * k).color(Color32::WHITE));
+                                            } else if ui
+                                                .small_button("✖")
+                                                .on_hover_text("Remove from this list (the file itself is not touched)")
+                                                .clicked()
+                                            {
+                                                forget = Some(e.bin.clone());
+                                            }
+                                        });
+                                    });
+                                });
+                            });
+                            let resp = row.response;
+                            if !is_chosen && playable {
+                                if resp.clone().on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                                    pick = Some(e.bin.clone());
+                                }
+                            } else if !playable && !is_chosen {
+                                resp.on_hover_text("This disc image cannot be played until it is found again (scan its folder) or re-imported");
+                            }
+                        }
+                    });
+            });
+            ctx.data_mut(|d| d.insert_temp(height_id, area.response.rect.height()));
+            // Close on a click elsewhere, or Esc.
+            let outside = ctx.input(|i| {
+                i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !area.response.rect.contains(p) && !r.rect.contains(p))
+            });
+            if open && (outside || ctx.input(|i| i.key_pressed(Key::Escape))) {
+                open = false;
+            }
+            if t < 1.0 {
+                ctx.request_repaint();
+            }
+        }
+        if let Some(bin) = pick {
+            open = false;
+            self.lib.select(g, &bin);
+            self.save_library();
+        }
+        if let Some(bin) = forget {
+            self.lib.forget(g, &bin);
+            self.save_library();
+        }
+        ctx.data_mut(|d| d.insert_temp(open_id, open));
+    }
+
+    fn save_library(&mut self) {
+        if let Err(e) = self.lib.save(&self.paths) {
+            self.notify(format!("Could not save library: {e}"), true);
+        }
     }
 
     fn settings_screen(&mut self, ctx: &egui::Context) {

@@ -19,6 +19,7 @@ pub const BUILTIN_NAME: &str = "built-in OpenBIOS";
 const KNOWN: &[(&str, &str, Region)] = &[
     ("0555c6fae8906f3f09baf5988f00e55f88e9f30b", "SCPH-5501 v3.0 (USA)", Region::NtscU),
     ("f6bc2d1f5eb6593de7d089c425ac681d6fffd3f0", "SCPH-5502/5552 v3.0 (Europe)", Region::Pal),
+    ("b05def971d8ec59f346f2d9ac21fb742e3eb6917", "SCPH-5500 v3.0 (Japan)", Region::NtscJ),
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -6,7 +6,7 @@ Re:Compiled translates the games' own MIPS code (read from *your* discs) into na
 
 | | |
 |---|---|
-| Games | Digimon World (USA), Digimon World 2 (USA), Digimon World 2003 (Europe), Digimon World 3 (USA, unverified) |
+| Games | Digimon World (USA), Digimon World 2 (USA), Digimon World 2003 (Europe); also recognised, not yet verified: Digimon World (Japan), Digimon World 3 (Japan, USA) |
 | Platforms | Windows 10/11, Linux (X11/Wayland), macOS 11+ (Intel and Apple Silicon) |
 | Language | Rust (plus Lua 5.4 for mod scripts; the optional built-in BIOS is OpenBIOS, MIT-licensed C) |
 | You provide | Your disc images (the `.bin`; a `.cue` is optional). A BIOS dump is optional |
@@ -17,6 +17,8 @@ Re:Compiled translates the games' own MIPS code (read from *your* discs) into na
 
 1. **Get the program.** Download a release zip for your OS from [Releases](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled/releases), or build it yourself (see [Building](#building)). On Windows you can also double-click `Play-Windows.bat` in a source checkout: it builds whatever changed (if Rust is installed) and starts the program.
 2. **Point it at your discs.** On first launch, click **Scan a folder for discs…** and pick the folder holding your `.bin` images (`.cue` files are used if present but not needed). Each disc is identified and checked against known-good dumps (SHA-1). BIOS files in the folder are picked up too. You can also import discs individually, add a BIOS in **Settings → BIOS**, or drop either on the window.
+
+   If you have more than one disc for a game (another region, or another copy), all of them are kept: click the release name under the game's title (for example *Digimon World (USA) · SLUS-01032*) to unroll the list and pick the one that plays.
 3. **Press Play.**
 
 Your discs are never copied or modified. Saves (memory cards), settings, screenshots and generated data live in your user data folder:
@@ -58,11 +60,19 @@ These images are verified end-to-end (full-image SHA-1):
 | Digimon World 2 (USA) | SLUS-01193 | `Digimon World 2 (USA).bin` | `d9cb009bc0006e901d8ab1365f764ab71da02115` |
 | Digimon World 2003 (Europe) | SLES-03936 | `Digimon World 2003 (Europe) (En,Fr,De,Es,It).bin` | `457cb233349ba841e03b33d8060f8fbcadd45cb3` |
 
-Other dumps of these releases are accepted with an "unverified" note.
+These releases are also recognised and run, but no dump of them is on the verified list yet, so they show an "unverified" note:
+
+| Game | Serial |
+|---|---|
+| Digimon World (Japan) | SLPS-01797 |
+| Digimon World 3: Aratanaru Bouken no Tobira (Japan) | SLPS-03446 |
+| Digimon World 3 (USA) | SLUS-01436 |
+
+Other dumps of the verified releases are accepted with the same note. A `.cue` file is optional; one that names a `.bin` that has since been renamed is worked around by using the `.bin` with the cue's own name.
 
 ### BIOS (optional)
 
-Without a BIOS dump, games start with the built-in **OpenBIOS** (open source, MIT, by the PCSX-Redux authors). All three games boot, play and save with it, and a memory card it writes is byte-for-byte the same as one written through Sony's BIOS, so saves move freely between the two. The games' own code runs identically either way; adding a BIOS dumped from your console also makes the BIOS's own routines (boot sequence, kernel calls) exact, and enables **fast boot**. BIOS images verified: SCPH-5501 (USA, v3.0) and SCPH-5502/5552 (Europe, v3.0); other genuine BIOS dumps are accepted for their region. **Settings → BIOS** lists the BIOS files you have added (add or remove them there) and chooses between yours and the built-in one.
+Without a BIOS dump, games start with the built-in **OpenBIOS** (open source, MIT, by the PCSX-Redux authors). All three games boot, play and save with it, and a memory card it writes is byte-for-byte the same as one written through Sony's BIOS, so saves move freely between the two. The games' own code runs identically either way; adding a BIOS dumped from your console also makes the BIOS's own routines (boot sequence, kernel calls) exact, and enables **fast boot**. BIOS images verified: SCPH-5501 (USA, v3.0), SCPH-5502/5552 (Europe, v3.0) and SCPH-5500 (Japan, v3.0); other genuine BIOS dumps are accepted for their region. Each game uses the BIOS of its disc's region. **Settings → BIOS** lists the BIOS files you have added (add or remove them there) and chooses between yours and the built-in one.
 
 ## Mods
 
@@ -77,7 +87,7 @@ The launcher has a **Mods** page next to **Games** and **Settings**:
 
 Mods can replace files on the (virtual) disc, patch memory, and run Lua scripts with hooks on any code address, every frame and on controller input, with their own options and save data. Scripts run in a sandbox with no file, network or OS access. Authors publish versions as GitHub Releases; the launcher checks for mod updates when it starts and puts an **Update** button on each mod that has one. **F10** in game switches the running game's mods on and off.
 
-Re:Compiled ships only a documented **template**; mods themselves come from the index, for example [**Turbo**](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index/tree/HEAD/mods/Jack-The-Gamer@turbo) (hold R2, then any one or two buttons to turbo them) and [**Fast-Forward**](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index/tree/HEAD/mods/Jack-The-Gamer@fast-forward) (Select + Start for double or triple speed, with the music left at normal speed). Authors can publish a mod from their own GitHub repository or host it in the index itself. See **[docs/modding.md](docs/modding.md)** for using, writing and publishing mods.
+Re:Compiled ships only a documented **template**; mods themselves come from the index, for example [**Turbo**](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index/tree/HEAD/mods/Jack-The-Gamer@turbo) (hold R2, then any one or two buttons to turbo them) and [**Fast-Forward**](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index/tree/HEAD/mods/Jack-The-Gamer@fast-forward) (L2 + R2 for double or triple speed, with the music left at normal speed). Authors can publish a mod from their own GitHub repository or host it in the index itself. See **[docs/modding.md](docs/modding.md)** for using, writing and publishing mods.
 
 ## How it works
 
@@ -105,11 +115,12 @@ Details: **[docs/architecture.md](docs/architecture.md)** · accuracy notes: **[
 
 * All three games boot through the real BIOS (or fast boot), play their FMVs with XA audio, and reach gameplay.
 * The recompiler validates with **zero mismatches** against the interpreter (≈224,000 checked block executions over ≈30,000 distinct blocks across the three games), and recompiled runs produce **pixel-identical** frames to the interpreter over minutes of scripted play.
+* The Japanese releases of Digimon World and Digimon World 3 boot through SCPH-5500 and through OpenBIOS (Digimon World to its intro FMV, Digimon World 3 to its title screen) with zero validation mismatches; they have not been played further yet.
 * A disc-free differential fuzz test (`cargo test -p dwrc-recomp`) compares random programs on both engines in CI.
 
 ## Building
 
-Requirements: [Rust](https://rustup.rs) 1.84+ (stable).
+Requirements: [Rust](https://rustup.rs) 1.85+ (stable).
 
 * **Windows:** install Rust with `rustup-init.exe` (it offers to install the Visual Studio C++ build tools), then double-click `Play-Windows.bat` or run `cargo build --release`.
 * **Linux:** `sudo apt install build-essential pkg-config libasound2-dev libudev-dev libgtk-3-dev libxkbcommon-dev` (or your distribution's equivalents), then `./Play-Linux.sh` or `cargo build --release`.

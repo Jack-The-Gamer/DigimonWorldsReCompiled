@@ -7,7 +7,7 @@ Build with `cargo build --release -p dwrc-cli`; the tool is `target/release/dwrc
 | `dwrc-cli inspect <cue>` | Tracks, ISO volume, identification, every file with its LBA and size, `SYSTEM.CNF`, the boot executable header. |
 | `dwrc-cli extract <cue> <path> <out>` | Extract a file from the disc's filesystem. |
 | `dwrc-cli disasm <exe> <hex-addr> <count>` | Disassemble a PS-X EXE. |
-| `dwrc-cli import <data-root> <folder>` | Scan a folder into a library (same code as the launcher). |
+| `dwrc-cli import <data-root> <folder>` | Scan a folder into the library under `<data-root>` (same code as the launcher; every disc found is listed, unchanged images are not hashed again). |
 | `dwrc-cli run <bin or cue> [--bios <bin>] [options]` | Run a game headlessly (built-in OpenBIOS unless `--bios` is given). |
 | `dwrc-cli mod validate <folder>` | Check a mod folder (manifest, files, versions, dependencies). |
 | `dwrc-cli mod pack <folder> [--out DIR]` | Build `<id>-<version>.zip`, the asset a GitHub release should carry. |

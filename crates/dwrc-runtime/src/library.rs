@@ -3,10 +3,14 @@
 //! Discs are never copied or modified. Re:Compiled remembers where they
 //! are, verifies them once (full SHA-1) at import, and afterwards only does
 //! a quick size/mtime check before each launch.
+//!
+//! A game can have several discs (other regions, other copies); one of them
+//! is chosen on the Games page and is the one that plays.
 
 use crate::bios::{identify_bios, BiosInfo};
 use crate::paths::Paths;
 use anyhow::{anyhow, bail, Context, Result};
+use dwrc_disc::cue::CueSheet;
 use dwrc_disc::ident::{sha1_file, verified_dump, Region};
 use dwrc_disc::{Disc, GameId, Identification};
 use serde::{Deserialize, Serialize};
@@ -15,14 +19,30 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameEntry {
-    /// The `.cue` (or single `.bin`) the player picked.
+    /// The `.cue` (or single `.bin`) that is opened.
     pub disc_path: PathBuf,
+    /// The image file itself (`disc_path` may be its `.cue`). Identifies
+    /// the disc in the library.
+    #[serde(default)]
+    pub bin: PathBuf,
     pub ident: Identification,
     pub sha1: String,
     pub size: u64,
     pub mtime: u64,
     /// The full image matches a dump verified with Re:Compiled.
     pub verified: bool,
+}
+
+impl GameEntry {
+    /// The image's file name, to tell copies of one release apart.
+    pub fn file_name(&self) -> String {
+        let p = if self.bin.as_os_str().is_empty() { &self.disc_path } else { &self.bin };
+        p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+    }
+
+    fn is_image(&self, bin: &Path) -> bool {
+        same_file(&self.bin, bin)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,7 +53,11 @@ pub struct BiosEntry {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Library {
+    /// The disc each game plays: the one chosen on the Games page.
     pub games: BTreeMap<GameId, GameEntry>,
+    /// Every imported disc, the chosen ones included.
+    #[serde(default)]
+    pub discs: Vec<GameEntry>,
     pub bios: Vec<BiosEntry>,
 }
 
@@ -77,29 +101,108 @@ fn file_stamp(p: &Path) -> Option<(u64, u64)> {
     Some((m.len(), mtime))
 }
 
-/// Resolves the image file(s) for a disc path: a `.cue` is used as-is; for
-/// a `.bin`, a sibling `.cue` with the same name is preferred.
+/// Whether two paths name the same file (compared as given when either
+/// cannot be resolved, e.g. because it is missing).
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
+    }
+}
+
+fn has_ext(p: &Path, ext: &str) -> bool {
+    p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case(ext))
+}
+
+/// The files a `.cue` names, if it can be read.
+fn cue_files(cue: &Path) -> Option<Vec<PathBuf>> {
+    CueSheet::load(cue).ok().map(|s| s.files)
+}
+
+/// Resolves what to open for a disc image:
+/// * a `.cue` is used when the files it names exist; a `.cue` whose `.bin`
+///   was renamed falls back to the `.bin` with the cue's own name;
+/// * a `.bin` is opened through the `.cue` beside it with the same name,
+///   but only when that cue describes this `.bin` (two copies of a disc in
+///   one folder can share a cue that names only one of them).
 pub fn resolve_disc_path(p: &Path) -> PathBuf {
-    let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    if ext == "bin" {
-        let cue = p.with_extension("cue");
-        if cue.exists() {
-            return cue;
+    if has_ext(p, "cue") {
+        if cue_files(p).is_some_and(|f| !f.is_empty() && f.iter().all(|f| f.exists())) {
+            return p.to_path_buf();
         }
-        let cue_upper = p.with_extension("CUE");
-        if cue_upper.exists() {
-            return cue_upper;
+        for ext in ["bin", "BIN"] {
+            let bin = p.with_extension(ext);
+            if bin.exists() {
+                return bin;
+            }
+        }
+    } else if has_ext(p, "bin") {
+        for ext in ["cue", "CUE"] {
+            let cue = p.with_extension(ext);
+            if cue.exists() && cue_files(&cue).is_some_and(|f| f.len() == 1 && same_file(&f[0], p)) {
+                return cue;
+            }
         }
     }
     p.to_path_buf()
 }
 
+/// The image file behind a disc path (the `.bin` a `.cue` names).
+fn image_file(disc_path: &Path) -> Option<PathBuf> {
+    Disc::open(disc_path).ok().and_then(|d| d.file_paths().into_iter().next())
+}
+
+/// Whether an imported disc is still there, unchanged since it was verified.
+pub fn disc_status(e: &GameEntry) -> DiscStatus {
+    let bin = if e.bin.as_os_str().is_empty() || !e.disc_path.exists() {
+        match image_file(&e.disc_path) {
+            Some(b) => b,
+            None => return DiscStatus::Missing,
+        }
+    } else {
+        e.bin.clone()
+    };
+    match file_stamp(&bin) {
+        None => DiscStatus::Missing,
+        Some((size, mtime)) if size == e.size && mtime == e.mtime => DiscStatus::Ready,
+        Some(_) => DiscStatus::Changed,
+    }
+}
+
+/// Order of discs in a game's list: by region, then title, then file name.
+fn region_rank(r: Region) -> u8 {
+    match r {
+        Region::NtscU => 0,
+        Region::Pal => 1,
+        Region::NtscJ => 2,
+    }
+}
+
 impl Library {
     pub fn load(paths: &Paths) -> Self {
-        std::fs::read_to_string(paths.library_file())
+        let mut lib: Self = std::fs::read_to_string(paths.library_file())
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        lib.normalize();
+        lib
+    }
+
+    /// Brings a library written by an older version up to date: fills in
+    /// each disc's image file and lists every chosen disc among `discs`.
+    fn normalize(&mut self) {
+        for e in self.games.values_mut().chain(self.discs.iter_mut()) {
+            if e.bin.as_os_str().is_empty() {
+                if let Some(b) = image_file(&e.disc_path) {
+                    e.bin = b;
+                }
+            }
+        }
+        for e in self.games.values() {
+            if !self.discs.iter().any(|d| d.is_image(&e.bin) && d.ident.game == e.ident.game) {
+                self.discs.push(e.clone());
+            }
+        }
     }
 
     pub fn save(&self, paths: &Paths) -> Result<()> {
@@ -110,20 +213,78 @@ impl Library {
     }
 
     pub fn status(&self, g: GameId) -> DiscStatus {
-        let Some(e) = self.games.get(&g) else { return DiscStatus::NotImported };
-        let Ok(disc) = Disc::open(&e.disc_path) else { return DiscStatus::Missing };
-        let files = disc.file_paths();
-        let Some(first) = files.first() else { return DiscStatus::Missing };
-        match file_stamp(first) {
-            None => DiscStatus::Missing,
-            Some((size, mtime)) if size == e.size && mtime == e.mtime => DiscStatus::Ready,
-            Some(_) => DiscStatus::Changed,
+        match self.games.get(&g) {
+            Some(e) => disc_status(e),
+            None => DiscStatus::NotImported,
         }
     }
 
-    /// Identifies and verifies a disc image, adding it to the library.
-    /// `progress` receives a 0..1 hashing fraction.
+    /// Every disc imported for a game, in display order.
+    pub fn discs_for(&self, g: GameId) -> Vec<&GameEntry> {
+        let mut v: Vec<&GameEntry> = self.discs.iter().filter(|e| e.ident.game == g).collect();
+        v.sort_by(|a, b| {
+            (region_rank(a.ident.region), &a.ident.title, a.file_name().to_lowercase())
+                .cmp(&(region_rank(b.ident.region), &b.ident.title, b.file_name().to_lowercase()))
+        });
+        v
+    }
+
+    /// Makes the disc with image file `bin` the one its game plays.
+    pub fn select(&mut self, g: GameId, bin: &Path) -> bool {
+        match self.discs.iter().find(|e| e.ident.game == g && e.is_image(bin)) {
+            Some(e) => {
+                self.games.insert(g, e.clone());
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Removes a disc from the list (the file itself is not touched). When
+    /// it was the chosen one, another disc of the game takes its place.
+    pub fn forget(&mut self, g: GameId, bin: &Path) {
+        self.discs.retain(|e| !(e.ident.game == g && e.is_image(bin)));
+        if self.games.get(&g).is_some_and(|e| e.is_image(bin)) {
+            self.games.remove(&g);
+            self.choose_if_unplayable(g);
+        }
+    }
+
+    /// Picks a playable disc for a game whose chosen one is missing, changed
+    /// or not set: verified dumps first, then in list order.
+    fn choose_if_unplayable(&mut self, g: GameId) {
+        if self.status(g) == DiscStatus::Ready {
+            return;
+        }
+        let pick = {
+            let ready: Vec<&GameEntry> = self.discs_for(g).into_iter().filter(|e| disc_status(e) == DiscStatus::Ready).collect();
+            ready.iter().find(|e| e.verified).or(ready.first()).map(|e| (*e).clone())
+        };
+        if let Some(e) = pick {
+            self.games.insert(g, e);
+        }
+    }
+
+    /// Adds (or refreshes) a disc. The game plays it when `choose` is set or
+    /// when the game has no disc yet; a refreshed copy of the chosen disc
+    /// stays chosen.
+    fn add(&mut self, e: GameEntry, choose: bool) {
+        let g = e.ident.game;
+        self.discs.retain(|d| !(d.ident.game == g && d.is_image(&e.bin)));
+        let was_chosen = self.games.get(&g).is_some_and(|c| c.is_image(&e.bin));
+        if choose || was_chosen || !self.games.contains_key(&g) {
+            self.games.insert(g, e.clone());
+        }
+        self.discs.push(e);
+    }
+
+    /// Identifies and verifies a disc image, adding it to the library as the
+    /// disc its game plays. `progress` receives a 0..1 hashing fraction.
     pub fn import_disc(&mut self, path: &Path, progress: &mut dyn FnMut(f32)) -> Result<GameId> {
+        self.import(path, true, progress)
+    }
+
+    fn import(&mut self, path: &Path, choose: bool, progress: &mut dyn FnMut(f32)) -> Result<GameId> {
         let disc_path = resolve_disc_path(path);
         let mut disc = Disc::open(&disc_path).with_context(|| format!("could not open {}", disc_path.display()))?;
         let ident = dwrc_disc::identify(&mut disc)
@@ -133,12 +294,20 @@ impl Library {
         if files.len() != 1 {
             bail!("multi-file images are not supported (found {} files)", files.len());
         }
-        let bin = &files[0];
-        let (size, mtime) = file_stamp(bin).ok_or_else(|| anyhow!("cannot stat {}", bin.display()))?;
-        let sha1 = sha1_file(bin, |d, t| progress(d as f32 / t.max(1) as f32))?;
+        let bin = files[0].clone();
+        let (size, mtime) = file_stamp(&bin).ok_or_else(|| anyhow!("cannot stat {}", bin.display()))?;
+        // An image already verified and unchanged since is not hashed again.
+        let known = self.discs.iter().find(|e| e.is_image(&bin) && e.size == size && e.mtime == mtime).map(|e| e.sha1.clone());
+        let sha1 = match known {
+            Some(h) => {
+                progress(1.0);
+                h
+            }
+            None => sha1_file(&bin, |d, t| progress(d as f32 / t.max(1) as f32))?,
+        };
         let verified = verified_dump(&sha1).map(|d| d.serial == ident.serial).unwrap_or(false);
         let game = ident.game;
-        self.games.insert(game, GameEntry { disc_path, ident, sha1, size, mtime, verified });
+        self.add(GameEntry { disc_path, bin, ident, sha1, size, mtime, verified }, choose);
         Ok(game)
     }
 
@@ -171,20 +340,6 @@ impl Library {
         let mut report = ScanReport::default();
         let mut candidates = Vec::new();
         collect_files(dir, 0, &mut candidates);
-        // Prefer .cue files; only consider .bin files without a cue.
-        let cues: Vec<PathBuf> = candidates
-            .iter()
-            .filter(|p| p.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("cue")).unwrap_or(false))
-            .cloned()
-            .collect();
-        let mut seen_bins = std::collections::HashSet::new();
-        for c in &cues {
-            if let Ok(d) = Disc::open(c) {
-                for f in d.file_paths() {
-                    seen_bins.insert(f);
-                }
-            }
-        }
         for p in &candidates {
             let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
             let len = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
@@ -199,24 +354,54 @@ impl Library {
                 }
             }
         }
-        let mut discs: Vec<PathBuf> = cues.clone();
+        // Each disc image once, however many .cue files point at it: the
+        // .cue named like the image is preferred, then any .cue, then the
+        // bare .bin.
+        let mut discs: Vec<(PathBuf, PathBuf)> = Vec::new(); // (what to open, image file)
         for p in &candidates {
-            let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
             let len = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
-            if ext == "bin" && len > 50 << 20 && !seen_bins.contains(p) {
-                discs.push(p.clone());
+            if !(has_ext(p, "cue") || (has_ext(p, "bin") && len > 50 << 20)) {
+                continue;
+            }
+            let open = resolve_disc_path(p);
+            let Some(bin) = image_file(&open) else {
+                if has_ext(p, "cue") {
+                    report.skipped.push((p.clone(), "the .bin it names is missing".into()));
+                }
+                continue;
+            };
+            let named_like = |o: &Path| has_ext(o, "cue") && o.file_stem() == bin.file_stem();
+            match discs.iter_mut().find(|(_, b)| same_file(b, &bin)) {
+                Some(d) => {
+                    let better = (named_like(&open), has_ext(&open, "cue")) > (named_like(&d.0), has_ext(&d.0, "cue"));
+                    if better {
+                        d.0 = open;
+                    }
+                }
+                None => discs.push((open, bin)),
             }
         }
-        for p in discs {
-            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        // Games that had no disc get the best one found (not simply the
+        // first the folder listing gave).
+        let had_none: Vec<GameId> = GameId::ALL.into_iter().filter(|g| !self.games.contains_key(g)).collect();
+        let mut games = Vec::new();
+        for (p, bin) in discs {
+            let name = bin.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             let mut cb = |f: f32| progress(&name, f);
-            match self.import_disc(&p, &mut cb) {
+            match self.import(&p, false, &mut cb) {
                 Ok(g) => {
-                    let e = &self.games[&g];
-                    report.games.push((g, e.ident.title.clone(), e.verified));
+                    let e = self.discs.iter().find(|e| e.is_image(&bin)).expect("just imported");
+                    report.games.push((g, format!("{}  ·  {name}", e.ident.title), e.verified));
+                    games.push(g);
                 }
                 Err(e) => report.skipped.push((p, e.to_string())),
             }
+        }
+        for g in had_none {
+            self.games.remove(&g);
+        }
+        for g in games {
+            self.choose_if_unplayable(g);
         }
         report
     }
@@ -234,5 +419,120 @@ fn collect_files(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
         } else {
             out.push(p);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp(name: &str) -> PathBuf {
+        let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let d = std::env::temp_dir().join(format!("dwrc-lib-{name}-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn fake_bin(p: &Path) {
+        std::fs::write(p, vec![0u8; 2352]).unwrap();
+    }
+
+    fn cue_for(bin_name: &str) -> String {
+        format!("FILE \"{bin_name}\" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n")
+    }
+
+    fn entry(game: GameId, serial: &str, region: Region, bin: &Path, verified: bool) -> GameEntry {
+        let (size, mtime) = file_stamp(bin).unwrap();
+        let ident = Identification {
+            game,
+            serial: serial.into(),
+            title: format!("Title {serial}"),
+            region,
+            volume_id: String::new(),
+            boot_file: String::new(),
+            exe_sha1: String::new(),
+            exe_load_addr: 0,
+            exe_entry: 0,
+        };
+        GameEntry { disc_path: bin.to_path_buf(), bin: bin.to_path_buf(), ident, sha1: String::new(), size, mtime, verified }
+    }
+
+    #[test]
+    fn cue_and_bin_resolution() {
+        let d = tmp("resolve");
+        // Two copies of one disc, each with a cue named like it, both cues
+        // naming the first copy.
+        fake_bin(&d.join("Game (Europe) (En,Fr).bin"));
+        fake_bin(&d.join("Game (Europe).bin"));
+        std::fs::write(d.join("Game (Europe) (En,Fr).cue"), cue_for("Game (Europe) (En,Fr).bin")).unwrap();
+        std::fs::write(d.join("Game (Europe).cue"), cue_for("Game (Europe) (En,Fr).bin")).unwrap();
+        // A cue whose .bin was renamed to the cue's own name.
+        fake_bin(&d.join("Game (Japan).bin"));
+        std::fs::write(d.join("Game (Japan).cue"), cue_for("Game (Japan) (Rev 1).bin")).unwrap();
+
+        assert_eq!(resolve_disc_path(&d.join("Game (Europe) (En,Fr).bin")), d.join("Game (Europe) (En,Fr).cue"));
+        // The second copy is not opened through a cue that names the first.
+        assert_eq!(resolve_disc_path(&d.join("Game (Europe).bin")), d.join("Game (Europe).bin"));
+        assert_eq!(resolve_disc_path(&d.join("Game (Europe).cue")), d.join("Game (Europe).cue"));
+        assert_eq!(resolve_disc_path(&d.join("Game (Japan).cue")), d.join("Game (Japan).bin"));
+        assert_eq!(resolve_disc_path(&d.join("Game (Japan).bin")), d.join("Game (Japan).bin"));
+        let img = image_file(&resolve_disc_path(&d.join("Game (Japan).cue"))).unwrap();
+        assert!(same_file(&img, &d.join("Game (Japan).bin")));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn several_discs_per_game() {
+        let d = tmp("choose");
+        let (us, eu, eu2) = (d.join("us.bin"), d.join("eu.bin"), d.join("eu2.bin"));
+        for p in [&us, &eu, &eu2] {
+            fake_bin(p);
+        }
+        let g = GameId::Dw3;
+        let mut lib = Library::default();
+        lib.add(entry(g, "SLES-03936", Region::Pal, &eu, true), false);
+        assert_eq!(lib.games[&g].bin, eu, "a game's first disc is the one it plays");
+        lib.add(entry(g, "SLES-03936", Region::Pal, &eu2, false), false);
+        lib.add(entry(g, "SLUS-01436", Region::NtscU, &us, false), false);
+        assert_eq!(lib.games[&g].bin, eu, "adding discs keeps the choice");
+        let order: Vec<PathBuf> = lib.discs_for(g).iter().map(|e| e.bin.clone()).collect();
+        assert_eq!(order, vec![us.clone(), eu.clone(), eu2.clone()]);
+        // The same image again is refreshed, not listed twice.
+        lib.add(entry(g, "SLES-03936", Region::Pal, &eu, true), false);
+        assert_eq!(lib.discs.len(), 3);
+        assert!(lib.select(g, &eu2));
+        assert_eq!(lib.games[&g].bin, eu2);
+        assert!(!lib.select(GameId::Dw1, &eu), "not a disc of that game");
+        // Forgetting the chosen disc falls back to a playable one, verified first.
+        lib.forget(g, &eu2);
+        assert_eq!(lib.games[&g].bin, eu);
+        assert_eq!(lib.discs.len(), 2);
+        // A chosen disc that went missing gives way to one that is there.
+        std::fs::remove_file(&eu).unwrap();
+        assert_eq!(lib.status(g), DiscStatus::Missing);
+        lib.choose_if_unplayable(g);
+        assert_eq!(lib.games[&g].bin, us);
+        // Importing a disc by hand makes it the one that plays.
+        fake_bin(&eu2);
+        lib.add(entry(g, "SLES-03936", Region::Pal, &eu2, false), true);
+        assert_eq!(lib.games[&g].bin, eu2);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn older_library_files_still_load() {
+        let d = tmp("old");
+        let bin = d.join("dw1.bin");
+        fake_bin(&bin);
+        // Written before discs had a `bin` and the library a `discs` list.
+        let mut e = serde_json::to_value(entry(GameId::Dw1, "SLUS-01032", Region::NtscU, &bin, true)).unwrap();
+        e.as_object_mut().unwrap().remove("bin");
+        let json = serde_json::json!({ "games": { "Dw1": e }, "bios": [] });
+        let mut lib: Library = serde_json::from_value(json).unwrap();
+        lib.normalize();
+        assert_eq!(lib.discs.len(), 1);
+        assert!(same_file(&lib.games[&GameId::Dw1].bin, &bin));
+        assert_eq!(lib.status(GameId::Dw1), DiscStatus::Ready);
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

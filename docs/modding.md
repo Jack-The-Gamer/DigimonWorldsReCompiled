@@ -67,7 +67,7 @@ version = "1.0.0"            # semver
 author = "you"
 description = "What it does."
 game = "dw1"                 # dw1 | dw2 | dw3 | any — or games = ["dw1", "dw2"]
-serials = ["SLUS-01032"]     # optional: only these releases
+serials = ["SLUS-01032"]     # optional: only these releases (see Finding addresses)
 script = "main.lua"          # optional
 files_dir = "files"          # optional, default "files"
 github = "you/my-mod"        # optional: Releases carry updates (see Publishing)
@@ -247,7 +247,13 @@ end)
 
 ## Finding addresses
 
-The developer CLI (`dwrc-cli`, see [dev-tools.md](dev-tools.md)) can extract files from discs, disassemble the executable, run games headlessly with scripted input and dump VRAM/screenshots. Combined with a script that logs memory from `on_frame`, that is enough to locate game variables. Addresses differ between releases, so use `serials` to restrict mods to the release you studied.
+The developer CLI (`dwrc-cli`, see [dev-tools.md](dev-tools.md)) can extract files from discs, disassemble the executable, run games headlessly with scripted input and dump VRAM/screenshots. Combined with a script that logs memory from `on_frame`, that is enough to locate game variables. Addresses differ between releases, so use `serials` to restrict mods to the release you studied, or find code by pattern with `ctx:find` and check it before patching. One game can be several releases, and players can switch between them on the Games page:
+
+| `game` | Releases (`dwrc.serial`) |
+|---|---|
+| `dw1` | `SLUS-01032` (USA), `SLPS-01797` (Japan) |
+| `dw2` | `SLUS-01193` (USA) |
+| `dw3` | `SLES-03936` (Digimon World 2003, Europe), `SLPS-03446` (Japan), `SLUS-01436` (USA) |
 
 ## Tips
 
