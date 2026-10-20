@@ -30,6 +30,8 @@ pub struct Session {
     pub engine: EngineKind,
     /// The BIOS this session runs (a console dump or the built-in one).
     pub bios_name: String,
+    /// A PAL release running in its own 60 Hz mode (see `pal60`).
+    pub sixty_hz: bool,
 }
 
 /// Information shown before starting (so the UI can explain problems).
@@ -89,6 +91,7 @@ impl Session {
         };
         let mut psx = Psx::new(&bios, standard);
         psx.insert_disc(Box::new(disc) as Box<dyn SectorSource>, region);
+        let sixty_hz = cfg.video.pal_60hz && crate::pal60::enable(&mut psx, &ident.serial, &exe);
 
         let saves = paths.saves_dir(game);
         std::fs::create_dir_all(&saves)?;
@@ -110,7 +113,13 @@ impl Session {
             EngineKind::Validate => psx.set_engine(dwrc_recomp::new_engine(dwrc_recomp::Mode::Validate)),
         }
         mod_rt.install(&mut psx);
-        log::info!("starting {} ({}) with the {} engine and the {bios_name} BIOS", ident.title, ident.serial, psx.engine_name());
+        log::info!(
+            "starting {} ({}) with the {} engine and the {bios_name} BIOS{}",
+            ident.title,
+            ident.serial,
+            psx.engine_name(),
+            if sixty_hz { ", in its 60 Hz mode" } else { "" }
+        );
         Ok(Self {
             game,
             ident,
@@ -124,6 +133,7 @@ impl Session {
             frame: 0,
             engine,
             bios_name,
+            sixty_hz,
         })
     }
 

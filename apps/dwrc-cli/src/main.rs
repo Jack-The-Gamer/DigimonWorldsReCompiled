@@ -35,7 +35,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         _ => bail!(
-            "commands:\n  inspect <cue>\n  extract <cue> <path> <out>\n  run <bin|cue> [--bios <bin>] [--frames N] [--shots dir] [--every K] [--fast] [--input frame:button:len,...] [--mod <folder>]... [--card1 F.mcd] [--trace-bios] [--dump-ram F] [--serve]\n  disasm <exe> <addr> <count>\n  mod validate <folder>              check a mod folder\n  mod pack <folder> [--out <dir>]    build <id>-<version>.zip for a GitHub release\n  mod install <zip> [--data <dir>] [--replace]\n  mod list [--data <dir>]\n  mod index <owner/repo | URL>       read a mod index feed\n  mod releases <owner/repo> <id>     list a mod's installable GitHub releases"
+            "commands:\n  inspect <cue>\n  extract <cue> <path> <out>\n  run <bin|cue> [--bios <bin>] [--frames N] [--shots dir] [--every K] [--fast] [--input frame:button:len,...] [--mod <folder>]... [--card1 F.mcd] [--pal60] [--trace-bios] [--dump-ram F] [--serve]\n  disasm <exe> <addr> <count>\n  mod validate <folder>              check a mod folder\n  mod pack <folder> [--out <dir>]    build <id>-<version>.zip for a GitHub release\n  mod install <zip> [--data <dir>] [--replace]\n  mod list [--data <dir>]\n  mod index <owner/repo | URL>       read a mod index feed\n  mod releases <owner/repo> <id>     list a mod's installable GitHub releases"
         ),
     }
 }
@@ -133,6 +133,15 @@ fn run(args: &[String]) -> Result<()> {
     let exe = PsxExe::parse(&fs.read(&mut disc, &exe_entry)?)?;
 
     let mut psx = Psx::new(&bios, std);
+    // --pal60: a PAL release with a 60 Hz mode of its own (Digimon World
+    // 2003) runs in it, as the launcher does by default.
+    if flag(args, "--pal60") {
+        if dwrc_runtime::pal60::enable(&mut psx, &ident.serial, &exe) {
+            println!("60 Hz: the game's own 60 Hz mode is on");
+        } else {
+            println!("60 Hz: this release has no 60 Hz mode to switch on");
+        }
+    }
     match opt(args, "--engine").unwrap_or("interp") {
         "recomp" => psx.set_engine(dwrc_recomp::new_engine(dwrc_recomp::Mode::Native)),
         "validate" => psx.set_engine(dwrc_recomp::new_engine(dwrc_recomp::Mode::Validate)),
@@ -292,6 +301,12 @@ fn run(args: &[String]) -> Result<()> {
     if flag(args, "--tty") && !psx.bus.tty.is_empty() {
         println!("--- TTY ---\n{}", psx.bus.tty);
     }
+    let (g, di) = (&psx.bus.gpu, psx.bus.gpu.display_info());
+    println!(
+        "display: {}x{} from vram ({}, {}), lines {}..{}, h {}..{}, {}",
+        di.width, di.height, di.x, di.y, g.v_start, g.v_end, g.h_start, g.h_end,
+        if di.pal { "PAL" } else { "NTSC" }
+    );
     println!("engine: {} {}", psx.engine_name(), psx.engine_report());
     Ok(())
 }

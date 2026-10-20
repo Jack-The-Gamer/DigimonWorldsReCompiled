@@ -16,6 +16,10 @@ The SPU's 4-point interpolation uses the console's exact 512-entry table; a unit
 
 These follow the nocash PSX specification and Mednafen's hardware-tested behaviour, and match it as far as tested here: CPU pipeline effects, COP0 and exceptions, instruction cache, memory timing, GTE (bit-exact), GPU rasterisation rules, DMA, timers, MDEC decoding, SPU envelopes/ADPCM/reverb, CD-ROM command behaviour, controller and memory-card protocols.
 
+## Options that differ from a console
+
+* **Digimon World 2003 at 60 Hz** (on by default). The European release ships at 50 Hz, about 17% slower than the USA release, but its executable contains a complete 60 Hz mode behind two words of data the game never changes (`0x8005CCAC`, `0x8005CCB0`; see `crates/dwrc-runtime/src/pal60.rs`). Re:Compiled sets them when the executable starts. The game then runs its own NTSC code: the USA release's video timing and display range, and music at the USA tempo (checked by comparing the title music's beat with Digimon World 3 (USA)). A PAL console would do the same with these two values changed, on a TV that accepts 60 Hz. Untick the option for the release as shipped.
+
 ## Known approximations (to be replaced)
 
 | Area | Current state | Effect |

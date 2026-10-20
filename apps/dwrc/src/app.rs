@@ -677,6 +677,12 @@ impl App {
                     });
                     changed |= ui.checkbox(&mut self.cfg.video.show_fps, "Show frame rate").changed();
                     changed |= ui.checkbox(&mut self.cfg.video.start_fullscreen, "Start in fullscreen (F11 toggles)").changed();
+                    changed |= ui
+                        .checkbox(&mut self.cfg.video.pal_60hz, "Digimon World 2003 at 60 Hz")
+                        .on_hover_text(
+                            "The European release has a 60 Hz mode of its own, which plays at the speed of the USA release                              with the same music tempo. Untick it for the original 50 Hz, which plays about 17% slower.                              Takes effect the next time the game starts.",
+                        )
+                        .changed();
                 });
                 section(ui, "Audio", |ui| {
                     ui.horizontal(|ui| {

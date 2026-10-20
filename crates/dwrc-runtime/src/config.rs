@@ -52,11 +52,14 @@ pub struct VideoConfig {
     pub start_fullscreen: bool,
     /// Settings for the CRT filter.
     pub crt: CrtConfig,
+    /// Run Digimon World 2003 (Europe) in its own 60 Hz mode, at the speed
+    /// of the USA release; off plays it at the original 50 Hz.
+    pub pal_60hz: bool,
 }
 
 impl Default for VideoConfig {
     fn default() -> Self {
-        Self { filter: Filter::Nearest, aspect: Aspect::Tv4x3, show_fps: false, start_fullscreen: false, crt: CrtConfig::default() }
+        Self { filter: Filter::Nearest, aspect: Aspect::Tv4x3, show_fps: false, start_fullscreen: false, crt: CrtConfig::default(), pal_60hz: true }
     }
 }
 

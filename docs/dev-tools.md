@@ -29,6 +29,7 @@ Build with `cargo build --release -p dwrc-cli`; the tool is `target/release/dwrc
 | `--mod DIR` | enable a mod folder (repeatable) |
 | `--tty` | echo the BIOS/game debug console |
 | `--card1 FILE.mcd` / `--card2` | use (and afterwards save) memory card images |
+| `--pal60` | run Digimon World 2003 (Europe) in its own 60 Hz mode, as the launcher does by default |
 | `--trace-bios` | list the BIOS functions the game calls (table, number, count, first frame) |
 | `--dump-entry` | print the hardware state when the game's entry point is reached |
 | `--pcs` | sample where the CPU spends its time at the end of the run |

@@ -31,7 +31,7 @@ Your discs are never copied or modified. Saves (memory cards), settings, screens
 
 **Portable mode:** put an empty file named `portable.txt` next to the program and everything is kept in a `data` folder beside it instead.
 
-**Video:** **Settings → Video** offers sharp original pixels, smoothed scaling, or a **CRT** filter that draws the picture like a CRT television (scanlines, phosphor mask and screen curvature, each adjustable), plus 4:3, integer-scaled or stretched output.
+**Video:** **Settings → Video** offers sharp original pixels, smoothed scaling, or a **CRT** filter that draws the picture like a CRT television (scanlines, phosphor mask and screen curvature, each adjustable), plus 4:3, integer-scaled or stretched output. **Digimon World 2003 (Europe)** plays at **60 Hz** by default: the European release has a 60 Hz mode of its own, and Re:Compiled switches it on, so it plays at the speed of the USA release with the same music tempo. Untick **Digimon World 2003 at 60 Hz** there for the original 50 Hz, which plays about 17% slower.
 
 **Updates:** when a new version is released, an **Update** button appears at the bottom of the Games page. It shows what's new, downloads the new version and replaces the program where it is; your games, saves, settings and mods are kept, and a restart finishes it. **Settings → About** can turn the check off. (A copy built from source updates by pulling and rebuilding instead. Versions before 0.2.2 can't update themselves: download the latest release once by hand.)
 
