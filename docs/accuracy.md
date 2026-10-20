@@ -7,7 +7,7 @@
 * All three supported releases boot through the real BIOS (or fast boot), play their FMVs (MDEC + XA audio) and reach gameplay with scripted input; memory cards are detected, written and read.
 * They also boot, play and save on the built-in OpenBIOS. Digimon World's new-game save written through OpenBIOS is byte-identical (all 1024 card frames) to the one written through SCPH-5501.
 * The recompiler matches the reference interpreter: zero mismatches across ≈224,000 validated block executions (≈30,000 distinct blocks), and pixel-identical frames between engines over minutes of play.
-* The Japanese releases of Digimon World (SLPS-01797) and Digimon World 3 (SLPS-03446) boot through SCPH-5500 (fast boot) and through OpenBIOS, to the intro FMV and the title screen respectively, with zero validation mismatches (≈89,000 block executions). They are recognised but not yet verified end-to-end (gameplay, saves).
+* The other releases boot through their region's console BIOS (fast boot) and through OpenBIOS with zero validation mismatches over 3600 frames each: Digimon World Europe (SLES-02914) and Japan (SLPS-01797) and Digimon World 2 Japan (SLPS-02844) to their intro FMV, Digimon World 3 Japan (SLPS-03446) to its title screen and USA (SLUS-01436) to its load menu (≈241,000 block executions in all). They are recognised but not yet verified end-to-end (gameplay, saves).
 * A full BIOS boot needed one fix: on a DICR write, interrupt flags of channels whose enable bit is written as 0 are cleared (Mednafen behaviour). Without it, DMA completion flags left by the BIOS shell raise a spurious interrupt in Digimon World's FMV streaming code.
 
 ## Modelled from hardware documentation

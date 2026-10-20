@@ -251,8 +251,8 @@ The developer CLI (`dwrc-cli`, see [dev-tools.md](dev-tools.md)) can extract fil
 
 | `game` | Releases (`dwrc.serial`) |
 |---|---|
-| `dw1` | `SLUS-01032` (USA), `SLPS-01797` (Japan) |
-| `dw2` | `SLUS-01193` (USA) |
+| `dw1` | `SLUS-01032` (USA), `SLES-02914` (Europe), `SLPS-01797` (Japan) |
+| `dw2` | `SLUS-01193` (USA), `SLPS-02844` (Japan) |
 | `dw3` | `SLES-03936` (Digimon World 2003, Europe), `SLPS-03446` (Japan), `SLUS-01436` (USA) |
 
 ## Tips

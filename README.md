@@ -6,7 +6,7 @@ Re:Compiled translates the games' own MIPS code (read from *your* discs) into na
 
 | | |
 |---|---|
-| Games | Digimon World (USA), Digimon World 2 (USA), Digimon World 2003 (Europe); also recognised, not yet verified: Digimon World (Japan), Digimon World 3 (Japan, USA) |
+| Games | Digimon World (USA), Digimon World 2 (USA), Digimon World 2003 (Europe); also recognised, not yet verified: Digimon World (Europe, Japan), Digimon World 2 (Japan), Digimon World 3 (USA, Japan) |
 | Platforms | Windows 10/11, Linux (X11/Wayland), macOS 11+ (Intel and Apple Silicon) |
 | Language | Rust (plus Lua 5.4 for mod scripts; the optional built-in BIOS is OpenBIOS, MIT-licensed C) |
 | You provide | Your disc images (the `.bin`; a `.cue` is optional). A BIOS dump is optional |
@@ -64,9 +64,11 @@ These releases are also recognised and run, but no dump of them is on the verifi
 
 | Game | Serial |
 |---|---|
+| Digimon World (Europe) | SLES-02914 |
 | Digimon World (Japan) | SLPS-01797 |
-| Digimon World 3: Aratanaru Bouken no Tobira (Japan) | SLPS-03446 |
+| Digimon World 2 (Japan) | SLPS-02844 |
 | Digimon World 3 (USA) | SLUS-01436 |
+| Digimon World 3: Aratanaru Bouken no Tobira (Japan) | SLPS-03446 |
 
 Other dumps of the verified releases are accepted with the same note. A `.cue` file is optional; one that names a `.bin` that has since been renamed is worked around by using the `.bin` with the cue's own name.
 
@@ -115,7 +117,7 @@ Details: **[docs/architecture.md](docs/architecture.md)** · accuracy notes: **[
 
 * All three games boot through the real BIOS (or fast boot), play their FMVs with XA audio, and reach gameplay.
 * The recompiler validates with **zero mismatches** against the interpreter (≈224,000 checked block executions over ≈30,000 distinct blocks across the three games), and recompiled runs produce **pixel-identical** frames to the interpreter over minutes of scripted play.
-* The Japanese releases of Digimon World and Digimon World 3 boot through SCPH-5500 and through OpenBIOS (Digimon World to its intro FMV, Digimon World 3 to its title screen) with zero validation mismatches; they have not been played further yet.
+* The other releases (Digimon World Europe and Japan, Digimon World 2 Japan, Digimon World 3 USA and Japan) boot through their region's console BIOS and through OpenBIOS with zero validation mismatches, to their intro FMV or, for Digimon World 3, the title screen and load menu; they have not been played further yet.
 * A disc-free differential fuzz test (`cargo test -p dwrc-recomp`) compares random programs on both engines in CI.
 
 ## Building
