@@ -53,6 +53,7 @@ frame number, and `--mod` folders run as usual.
 | `poke8` / `poke16` / `poke32 ADDR VALUE` | write memory |
 | `key [shift+\|ctrl+\|alt+]KEY` | a key press for mods (`dwrc.on_key`), e.g. `key shift+1` |
 | `savestate N` / `loadstate N` | save the console to slot N, or load it |
+| `pcs N [LO HI]` | run N frames and list the 40 addresses where the CPU spent most time (sampled every 57 cycles), optionally only between `LO` and `HI`: a quick way to find the code behind what's on screen |
 | `frame` | print the frame number |
 | `quit` | stop |
 

@@ -340,6 +340,7 @@ fn run(args: &[String]) -> Result<()> {
 /// poke8|poke16|poke32 <addr> <value>
 /// key [shift+|ctrl+|alt+]<key>     a key press for mods (dwrc.on_key), e.g. key shift+1
 /// savestate <slot> / loadstate <slot>
+/// pcs <frames> [lo hi]             sample where the CPU runs (optionally only lo..hi)
 /// frame                            print the frame number
 /// quit
 /// ```
@@ -445,6 +446,33 @@ fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button
             ["poke32", a, v] => {
                 psx.bus.poke32(num(a)?, num(v)?);
                 Ok(String::new())
+            }
+            ["pcs", n, rest @ ..] => {
+                // Where the CPU spends its time over n frames (the PC sampled
+                // every 57 cycles), optionally only between two addresses.
+                let (lo, hi) = match rest {
+                    [a, b] => (num(a)?, num(b)?),
+                    _ => (0, u32::MAX),
+                };
+                let mut hist: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+                let end = psx.frame_count + num(n)? as u64;
+                while psx.frame_count < end {
+                    let f = psx.frame_count;
+                    while psx.frame_count == f {
+                        psx.run_cycles(57);
+                        if (lo..hi).contains(&psx.cpu.pc) {
+                            *hist.entry(psx.cpu.pc).or_default() += 1;
+                        }
+                        if psx.bus.frame_done {
+                            psx.bus.frame_done = false;
+                            psx.frame_count += 1;
+                        }
+                    }
+                    frame += 1;
+                }
+                let mut v: Vec<_> = hist.into_iter().collect();
+                v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                Ok(v.iter().take(40).map(|(pc, n)| format!("{pc:08x}:{n}")).collect::<Vec<_>>().join(" "))
             }
             ["frame"] => Ok(format!("frame {frame}")),
             ["quit"] => Err(anyhow::anyhow!("quit")),
