@@ -55,6 +55,8 @@ frame number, and `--mod` folders run as usual.
 | `savestate N` / `loadstate N` | save the console to slot N, or load it |
 | `pcs N [LO HI]` | run N frames and list the 40 addresses where the CPU spent most time (sampled every 57 cycles), optionally only between `LO` and `HI`: a quick way to find the code behind what's on screen |
 | `prof N [MS] [BTN[+BTN…]]` | run N frames (holding the buttons) and time each on the host: the average, the worst, and every frame slower than `MS` (default 12), with the time spent translating code on the emulation thread in it (only with `recomp-inline` or `validate`; `recomp` translates in the background) |
+| `cd` | what the CD-ROM drive is doing: position, mode (double speed, XA-ADPCM, filter), idle/seeking/reading/playing, the XA filter and how many XA-ADPCM samples it has decoded (to tell streamed music from sequenced music) |
+| `wav FILE N [BTN[+BTN…]]` | run N frames (holding the buttons) and save their audio as a WAV, e.g. to compare music at normal speed and fast-forward |
 | `frame` | print the frame number |
 | `quit` | stop |
 

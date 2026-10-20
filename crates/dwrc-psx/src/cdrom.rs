@@ -646,6 +646,30 @@ impl Cdrom {
     }
 
     /// Next CD audio sample pair after the volume matrix (for the SPU).
+    /// What the drive is doing, for tools: position, mode, drive state,
+    /// XA filter and the XA-ADPCM samples decoded so far.
+    pub fn describe(&self) -> String {
+        let drive = match self.drive {
+            Drive::Idle => "idle".to_string(),
+            Drive::Seeking { target, .. } => format!("seeking to {target}"),
+            Drive::Reading { .. } => "reading".to_string(),
+            Drive::Playing { .. } => "playing CD-DA".to_string(),
+        };
+        format!(
+            "lba {} mode {:02x} ({}{}{}) {drive}, filter {}/{}, xa samples {} out {}, muted {}",
+            self.pos,
+            self.mode,
+            if self.mode & 0x80 != 0 { "double speed " } else { "" },
+            if self.mode & 0x40 != 0 { "XA-ADPCM " } else { "" },
+            if self.mode & 0x08 != 0 { "filter" } else { "" },
+            self.filter_file,
+            self.filter_channel,
+            self.xa.in_count,
+            self.xa.out_count,
+            self.muted || self.adpcm_muted
+        )
+    }
+
     pub fn next_audio_sample(&mut self) -> (i32, i32) {
         let (l, r) = self.xa.next_sample();
         if self.muted {

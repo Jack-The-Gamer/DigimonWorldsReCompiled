@@ -346,6 +346,8 @@ fn run(args: &[String]) -> Result<()> {
 /// savestate <slot> / loadstate <slot>
 /// pcs <frames> [lo hi]             sample where the CPU runs (optionally only lo..hi)
 /// prof <frames> [ms] [BTN[+BTN]]   host time per frame (buttons held); lists frames slower than ms
+/// cd                               what the CD-ROM drive is doing (mode, XA-ADPCM)
+/// wav <file> <frames> [BTN[+BTN]]  run frames (buttons held) and save their audio
 /// frame                            print the frame number
 /// quit
 /// ```
@@ -362,6 +364,8 @@ fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button
     };
     let mut frame = 0u64;
     let mut audio = Vec::new();
+    // The audio of the frames run while `wav` records.
+    let recording: std::cell::RefCell<Option<Vec<i16>>> = std::cell::RefCell::new(None);
     let mut notes: Vec<String> = Vec::new();
     let mut step = |psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, held: &[Button], frame: &mut u64, notes: &mut Vec<String>| {
         *frame += 1;
@@ -383,6 +387,9 @@ fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button
         notes.extend(mods.take_notices());
         audio.clear();
         psx.bus.spu.take_output(&mut audio);
+        if let Some(r) = recording.borrow_mut().as_mut() {
+            r.extend_from_slice(&audio);
+        }
     };
     let stdin = std::io::stdin();
     let mut out = std::io::stdout();
@@ -501,6 +508,20 @@ fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button
                 let mut v: Vec<_> = hist.into_iter().collect();
                 v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
                 Ok(v.iter().take(40).map(|(pc, n)| format!("{pc:08x}:{n}")).collect::<Vec<_>>().join(" "))
+            }
+            ["cd"] => Ok(psx.bus.cdrom.describe()),
+            ["wav", path, n, rest @ ..] => {
+                let held = match rest.first() {
+                    Some(b) => b.split('+').map(|b| parse_button(b).context("unknown button")).collect::<Result<Vec<_>>>()?,
+                    None => Vec::new(),
+                };
+                *recording.borrow_mut() = Some(Vec::new());
+                for _ in 0..num(n)? {
+                    step(psx, mods, &held, &mut frame, &mut notes);
+                }
+                let samples = recording.borrow_mut().take().unwrap_or_default();
+                save_wav(Path::new(path), &samples)?;
+                Ok(format!("{path}: {:.2} s", samples.len() as f64 / 2.0 / 44100.0))
             }
             ["frame"] => Ok(format!("frame {frame}")),
             ["quit"] => Err(anyhow::anyhow!("quit")),
