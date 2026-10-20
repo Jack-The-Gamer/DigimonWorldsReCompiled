@@ -42,10 +42,14 @@ pub struct Shared {
     pub fast_forward: AtomicBool,
     pub quit: AtomicBool,
     pub status: Mutex<EmuStatus>,
+    /// Messages for the screen (mods, save states), taken by the UI.
+    pub notices: Mutex<Vec<String>>,
 }
 
 pub enum EmuCmd {
     Reset,
+    /// A key pressed on the keyboard, for mods (`dwrc.on_key`).
+    Key { key: String, shift: bool, ctrl: bool, alt: bool },
 }
 
 pub struct EmuHandle {
@@ -64,6 +68,7 @@ impl EmuHandle {
             fast_forward: AtomicBool::new(false),
             quit: AtomicBool::new(false),
             status: Mutex::new(EmuStatus::default()),
+            notices: Mutex::new(Vec::new()),
         });
         let (tx, rx) = channel();
         let sh = shared.clone();
@@ -139,7 +144,12 @@ fn run(
                     session.reset();
                     audio.clear();
                 }
+                EmuCmd::Key { key, shift, ctrl, alt } => session.key(&key, shift, ctrl, alt),
             }
+        }
+        let notices = session.take_notices();
+        if !notices.is_empty() {
+            sh.notices.lock().unwrap().extend(notices);
         }
         if sh.paused.load(Ordering::Relaxed) {
             std::thread::sleep(Duration::from_millis(10));

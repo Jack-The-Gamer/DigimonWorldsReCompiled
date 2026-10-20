@@ -20,6 +20,7 @@ pub mod pad;
 pub mod sio;
 pub mod spu;
 mod spu_gauss;
+pub mod state;
 pub mod timers;
 
 pub use bus::Bus;
@@ -48,6 +49,8 @@ pub trait ExecEngine: Send {
     /// Called when RAM that may contain code was modified (DMA, stores
     /// while the cache is isolated, explicit invalidation).
     fn invalidate(&mut self, _start: u32, _len: u32) {}
+    /// Forgets everything derived from memory (a save state was loaded).
+    fn flush(&mut self, _bus: &mut Bus) {}
     fn name(&self) -> &'static str;
     /// Human-readable statistics (shown by tools).
     fn report(&self) -> String {
@@ -199,4 +202,58 @@ pub fn sideload_exe(cpu: &mut Cpu, bus: &mut Bus, exe: &dwrc_disc::PsxExe) {
     }
     cpu.set_pc(exe.pc);
     cpu.flush_icache();
+}
+
+crate::sync_enum!(VideoStandard { Ntsc = 0, Pal = 1 });
+
+/// What a save state starts with, and its layout version (bumped whenever a
+/// device's fields change, so an old state is refused rather than misread).
+const STATE_MAGIC: &[u8; 8] = b"DWRCPSX\0";
+const STATE_VERSION: u32 = 1;
+
+impl Psx {
+    /// The whole console as bytes (see [`state`]). Taken between frames.
+    pub fn save_state(&mut self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(4 << 20);
+        out.extend_from_slice(STATE_MAGIC);
+        out.extend_from_slice(&STATE_VERSION.to_le_bytes());
+        let mut s = state::Sync::save(&mut out);
+        self.sync_state(&mut s);
+        out
+    }
+
+    /// Restores a state from [`Psx::save_state`] taken with the same BIOS and
+    /// disc. On any problem the console is left exactly as it was.
+    pub fn load_state(&mut self, data: &[u8]) -> Result<(), String> {
+        let body = match data.strip_prefix(STATE_MAGIC.as_slice()) {
+            Some(b) if b.len() >= 4 => b,
+            _ => return Err("not a Re:Compiled save state".into()),
+        };
+        let version = u32::from_le_bytes(body[..4].try_into().unwrap());
+        if version != STATE_VERSION {
+            return Err(format!("saved by another version of Re:Compiled (state format {version}, this one reads {STATE_VERSION})"));
+        }
+        let before = self.save_state();
+        let mut s = state::Sync::load(&body[4..]);
+        self.sync_state(&mut s);
+        let ok = s.finished();
+        if !ok {
+            let mut s = state::Sync::load(&before[STATE_MAGIC.len() + 4..]);
+            self.sync_state(&mut s);
+        }
+        // RAM changed under the engine either way.
+        self.engine.flush(&mut self.bus);
+        if ok {
+            Ok(())
+        } else {
+            Err("the save state is damaged".into())
+        }
+    }
+
+    fn sync_state(&mut self, s: &mut state::Sync) {
+        use state::Field;
+        self.bus.sync(s);
+        self.cpu.sync(s);
+        self.frame_count.sync(s);
+    }
 }

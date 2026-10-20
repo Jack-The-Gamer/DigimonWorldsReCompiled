@@ -271,6 +271,10 @@ impl ExecEngine for RecompEngine {
         self.invalidate_range(start & 0x1F_FFFF, len);
     }
 
+    fn flush(&mut self, bus: &mut Bus) {
+        self.flush_all(bus);
+    }
+
     fn name(&self) -> &'static str {
         if self.validator.is_some() {
             "recompiler (validating)"

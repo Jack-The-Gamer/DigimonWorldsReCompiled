@@ -228,3 +228,34 @@ impl MemoryCard {
 fn checksum(b: &[u8]) -> u8 {
     b.iter().fold(0, |a, x| a ^ x)
 }
+
+impl crate::state::Field for State {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        let (mut tag, mut n) = match *self {
+            State::Idle => (0u8, 0u8),
+            State::Command => (1, 0),
+            State::Read(n) => (2, n),
+            State::Write(n) => (3, n),
+            State::Id(n) => (4, n),
+        };
+        tag.sync(s);
+        n.sync(s);
+        if s.loading() {
+            *self = match tag {
+                1 => State::Command,
+                2 => State::Read(n),
+                3 => State::Write(n),
+                4 => State::Id(n),
+                _ => State::Idle,
+            };
+        }
+    }
+}
+
+/// Where a transfer to or from the card stands. The card's contents are not
+/// part of a state: loading one never takes a player's saves back.
+impl crate::state::Field for MemoryCard {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(self, s; flag, state, sector, msb, index, checksum, write_buf, last);
+    }
+}

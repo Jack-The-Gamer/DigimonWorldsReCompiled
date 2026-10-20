@@ -276,3 +276,15 @@ impl Timers {
         best
     }
 }
+
+impl crate::state::Field for Counter {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(self, s; counter, mode, target, irq_done, paused, waiting, frac);
+    }
+}
+
+impl crate::state::Field for Timers {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(self, s; t, last_sync);
+    }
+}

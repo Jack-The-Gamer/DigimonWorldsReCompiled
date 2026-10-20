@@ -35,7 +35,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         _ => bail!(
-            "commands:\n  inspect <cue>\n  extract <cue> <path> <out>\n  run <bin|cue> [--bios <bin>] [--frames N] [--shots dir] [--every K] [--fast] [--input frame:button:len,...] [--mod <folder>]... [--card1 F.mcd] [--pal60] [--trace-bios] [--dump-ram F] [--serve]\n  disasm <exe> <addr> <count>\n  mod validate <folder>              check a mod folder\n  mod pack <folder> [--out <dir>]    build <id>-<version>.zip for a GitHub release\n  mod install <zip> [--data <dir>] [--replace]\n  mod list [--data <dir>]\n  mod index <owner/repo | URL>       read a mod index feed\n  mod releases <owner/repo> <id>     list a mod's installable GitHub releases"
+            "commands:\n  inspect <cue>\n  extract <cue> <path> <out>\n  run <bin|cue> [--bios <bin>] [--frames N] [--shots dir] [--every K] [--fast] [--input frame:button:len,...] [--mod <folder>]... [--card1 F.mcd] [--pal60] [--states DIR] [--trace-bios] [--dump-ram F] [--serve]\n  disasm <exe> <addr> <count>\n  mod validate <folder>              check a mod folder\n  mod pack <folder> [--out <dir>]    build <id>-<version>.zip for a GitHub release\n  mod install <zip> [--data <dir>] [--replace]\n  mod list [--data <dir>]\n  mod index <owner/repo | URL>       read a mod index feed\n  mod releases <owner/repo> <id>     list a mod's installable GitHub releases"
         ),
     }
 }
@@ -132,6 +132,15 @@ fn run(args: &[String]) -> Result<()> {
     let exe_entry = fs.find(&mut disc, &ident.boot_file)?.context("boot exe missing")?;
     let exe = PsxExe::parse(&fs.read(&mut disc, &exe_entry)?)?;
 
+    // Save states made by mods (or the --serve commands): --states DIR, or a
+    // folder in the temp directory.
+    let states = dwrc_runtime::savestate::StateStore::new(
+        opt(args, "--states").map(PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("dwrc-cli-states").join(&ident.serial)),
+        &ident.serial,
+        &ident.title,
+        &bios,
+        bios_path.map(|p| Path::new(p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()).as_deref().unwrap_or(dwrc_runtime::bios::BUILTIN_NAME),
+    );
     let mut psx = Psx::new(&bios, std);
     // --pal60: a PAL release with a 60 Hz mode of its own (Digimon World
     // 2003) runs in it, as the launcher does by default.
@@ -212,7 +221,9 @@ fn run(args: &[String]) -> Result<()> {
         std::fs::create_dir_all(d)?;
     }
     if flag(args, "--serve") {
-        return serve(&mut psx, &mut mod_rt, &script);
+        serve(&mut psx, &mut mod_rt, &script, &states)?;
+        println!("engine: {} {}", psx.engine_name(), psx.engine_report());
+        return Ok(());
     }
     let t0 = Instant::now();
     let mut buf = Vec::new();
@@ -236,6 +247,9 @@ fn run(args: &[String]) -> Result<()> {
         frame_no.store(f, std::sync::atomic::Ordering::Relaxed);
         psx.run_frame();
         mod_rt.on_frame(&mut psx, f);
+        for n in dwrc_runtime::savestate::handle_requests(&states, &mut psx, &mut mod_rt, &mut false).into_iter().chain(mod_rt.take_notices()) {
+            println!("frame {f}: {n}");
+        }
         psx.bus.spu.take_output(&mut audio);
         audio_total += audio.len();
         if wav.is_some() {
@@ -322,11 +336,14 @@ fn run(args: &[String]) -> Result<()> {
 /// ram <file>                       write main RAM (2 MiB from 0x80000000)
 /// peek <addr> [bytes]              print memory in hex
 /// poke8|poke16|poke32 <addr> <value>
+/// key [shift+|ctrl+|alt+]<key>     a key press for mods (dwrc.on_key), e.g. key shift+1
+/// savestate <slot> / loadstate <slot>
 /// frame                            print the frame number
 /// quit
 /// ```
-/// Every command answers with a line starting `ok` or `err`.
-fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button, u64)]) -> Result<()> {
+/// Every command answers with a line starting `ok` or `err`; messages from
+/// mods and save states follow it after ` | `.
+fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button, u64)], states: &dwrc_runtime::savestate::StateStore) -> Result<()> {
     use std::io::{BufRead, Write};
     let num = |s: &str| -> Result<u32> {
         let s = s.trim();
@@ -337,7 +354,8 @@ fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button
     };
     let mut frame = 0u64;
     let mut audio = Vec::new();
-    let mut step = |psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, held: &[Button], frame: &mut u64| {
+    let mut notes: Vec<String> = Vec::new();
+    let mut step = |psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, held: &[Button], frame: &mut u64, notes: &mut Vec<String>| {
         *frame += 1;
         let mut state = dwrc_psx::PadState::default();
         for b in held {
@@ -353,6 +371,8 @@ fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button
         mods.apply_speed(psx);
         psx.run_frame();
         mods.on_frame(psx, *frame);
+        notes.extend(dwrc_runtime::savestate::handle_requests(states, psx, mods, &mut false));
+        notes.extend(mods.take_notices());
         audio.clear();
         psx.bus.spu.take_output(&mut audio);
     };
@@ -365,15 +385,32 @@ fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button
             ["press", btns, n] => {
                 let held = btns.split('+').map(|b| parse_button(b).context("unknown button")).collect::<Result<Vec<_>>>()?;
                 for _ in 0..num(n)? {
-                    step(psx, mods, &held, &mut frame);
+                    step(psx, mods, &held, &mut frame, &mut notes);
                 }
                 Ok(format!("frame {frame}"))
             }
             ["wait", n] => {
                 for _ in 0..num(n)? {
-                    step(psx, mods, &[], &mut frame);
+                    step(psx, mods, &[], &mut frame, &mut notes);
                 }
                 Ok(format!("frame {frame}"))
+            }
+            ["key", spec] => {
+                let parts: Vec<&str> = spec.split('+').collect();
+                let (key, held) = parts.split_last().context("key name")?;
+                let has = |m: &str| held.iter().any(|h| h.eq_ignore_ascii_case(m));
+                mods.on_key(psx, key, has("shift"), has("ctrl"), has("alt"));
+                notes.extend(dwrc_runtime::savestate::handle_requests(states, psx, mods, &mut false));
+                notes.extend(mods.take_notices());
+                Ok(format!("key {key}"))
+            }
+            ["savestate", n] => {
+                states.save(psx, num(n)?)?;
+                Ok(format!("saved slot {n} at frame {frame}"))
+            }
+            ["loadstate", n] => {
+                states.load(psx, num(n)?)?;
+                Ok(format!("loaded slot {n}"))
             }
             ["shot", path] => {
                 let mut buf = Vec::new();
@@ -412,8 +449,9 @@ fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button
             [] => Ok(String::new()),
             _ => Err(anyhow::anyhow!("unknown command")),
         })();
+        let extra = if notes.is_empty() { String::new() } else { format!(" | {}", std::mem::take(&mut notes).join(" | ")) };
         match r {
-            Ok(s) => writeln!(out, "ok {s}")?,
+            Ok(s) => writeln!(out, "ok {s}{extra}")?,
             Err(e) if e.to_string() == "quit" => break,
             Err(e) => writeln!(out, "err {e:#}")?,
         }

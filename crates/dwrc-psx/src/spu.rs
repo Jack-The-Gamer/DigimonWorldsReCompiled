@@ -997,3 +997,43 @@ mod tests {
         assert!((396..=401).contains(&f[1]), "sped-up voice: {f:?}");
     }
 }
+
+crate::sync_enum!(Phase { Attack = 0, Decay = 1, Sustain = 2, Release = 3, Off = 4 });
+
+impl crate::state::Field for Envelope {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(self, s; level, counter);
+    }
+}
+
+impl crate::state::Field for Volume {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(self, s; reg, level, env);
+    }
+}
+
+impl crate::state::Field for Voice {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(
+            self, s; vol_l, vol_r, pitch, start, repeat, adsr, addr, counter, buf, prev, phase, env, flags, out, ignore_loop_addr, needs_decode
+        );
+    }
+}
+
+impl crate::state::Field for Reverb {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(self, s; regs, base, cur, in_l, in_r, in_pos, up_l, up_r, up_pos, out_l, out_r, odd);
+    }
+}
+
+/// Audio already produced (`output`) belongs to the host, and the speed
+/// settings (`speed`, `realtime_voices`) to the mods running now.
+impl crate::state::Field for Spu {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(
+            self, s; ram, voices, main_l, main_r, reverb_vol_l, reverb_vol_r, kon, koff, pmon, non, eon, endx, ctrl, stat_irq, irq_addr,
+            transfer_addr_reg, transfer_addr, transfer_ctrl, fifo, cd_vol, ext_vol, unknown, noise_level, noise_timer, capture_pos, reverb,
+            last_sync, remainder, pending_irq_from_dma, ff_phase, ff_acc
+        );
+    }
+}

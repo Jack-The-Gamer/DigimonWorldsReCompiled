@@ -757,3 +757,9 @@ mod tests {
         assert_eq!(g.read_data(31), 12);
     }
 }
+
+impl crate::state::Field for Gte {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(self, s; v, rgbc, otz, ir, sxy, sz, rgb_fifo, res1, mac, lzcs, lzcr, rt, tr, llm, bk, lcm, fc, ofx, ofy, h, dqa, dqb, zsf3, zsf4, flag);
+    }
+}

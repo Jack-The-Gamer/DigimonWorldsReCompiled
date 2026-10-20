@@ -20,6 +20,8 @@ These follow the nocash PSX specification and Mednafen's hardware-tested behavio
 
 * **Digimon World 2003 at 60 Hz** (on by default). The European release ships at 50 Hz, about 17% slower than the USA release, but its executable contains a complete 60 Hz mode behind two words of data the game never changes (`0x8005CCAC`, `0x8005CCB0`; see `crates/dwrc-runtime/src/pal60.rs`). Re:Compiled sets them when the executable starts. The game then runs its own NTSC code: the USA release's video timing and display range, and music at the USA tempo (checked by comparing the title music's beat with Digimon World 3 (USA)). A PAL console would do the same with these two values changed, on a TV that accepts 60 Hz. Untick the option for the release as shipped.
 
+* **Save states** (through mods such as Save States). A loaded state continues exactly as the game did after it was saved: RAM, VRAM, sound RAM, CPU and every device's registers and timing are restored, and the following frames and audio are bit-identical (tested on all three games, during movies, with zero validation mismatches). Memory cards are deliberately not part of a state, so a game that cached what was on a card before the state was saved may not notice a save written since.
+
 ## Known approximations (to be replaced)
 
 | Area | Current state | Effect |

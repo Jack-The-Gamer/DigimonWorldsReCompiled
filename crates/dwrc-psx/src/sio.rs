@@ -232,3 +232,23 @@ impl Sio {
         }
     }
 }
+
+crate::sync_enum!(Target { None = 0, Pad = 1, Card = 2 });
+
+impl crate::state::Field for Sio {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(self, s; pads, mode, ctrl, baud, rx, rx_full, irq_flag, ack_level, target, transfer, ack_at, ack_end_at);
+        // Cards: the transfer state of each card inserted both now and when
+        // the state was saved.
+        for card in self.cards.iter_mut() {
+            let mut present = card.is_some();
+            present.sync(s);
+            match card {
+                Some(c) if present => c.sync(s),
+                Some(_) => {}
+                None if present => crate::memcard::MemoryCard::new_formatted().sync(s),
+                None => {}
+            }
+        }
+    }
+}

@@ -58,7 +58,7 @@ enum Drive {
     Playing { next: u64 },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct Response {
     irq: u8,
     data: Vec<u8>,
@@ -867,5 +867,55 @@ mod tests {
             let s: f32 = p.iter().sum();
             assert!((s - 1.0).abs() < 1e-4);
         }
+    }
+}
+
+crate::sync_enum!(After { Read = 0, Play = 1, SeekOnly = 2 });
+
+impl crate::state::Field for Drive {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        let (mut tag, mut target, mut after, mut at) = match *self {
+            Drive::Idle => (0u8, 0u32, After::Read, 0u64),
+            Drive::Seeking { target, after, done } => (1, target, after, done),
+            Drive::Reading { next } => (2, 0, After::Read, next),
+            Drive::Playing { next } => (3, 0, After::Read, next),
+        };
+        tag.sync(s);
+        target.sync(s);
+        after.sync(s);
+        at.sync(s);
+        if s.loading() {
+            *self = match tag {
+                1 => Drive::Seeking { target, after, done: at },
+                2 => Drive::Reading { next: at },
+                3 => Drive::Playing { next: at },
+                _ => Drive::Idle,
+            };
+        }
+    }
+}
+
+impl crate::state::Field for Response {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(self, s; irq, data, at);
+    }
+}
+
+/// The filter table is a constant of the decoder.
+impl crate::state::Field for XaDecoder {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(self, s; prev, ring, in_count, out_count, out, stereo);
+    }
+}
+
+/// The disc and its region stay as they are: the caller makes sure a state
+/// is only loaded with the disc it was saved with.
+impl crate::state::Field for Cdrom {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(
+            self, s; index, params, response, irq_enable, irq_flags, pending_cmd, queue, last_ack, stat, mode, setloc, setloc_pending, pos, drive,
+            filter_file, filter_channel, sector, sector_valid, last_header, have_header, data_fifo, data_pos, request, xa, muted, adpcm_muted,
+            vol_pending, vol, last_sync
+        );
     }
 }

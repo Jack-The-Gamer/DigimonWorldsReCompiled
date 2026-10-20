@@ -796,3 +796,18 @@ mod tests {
         assert_eq!(lwl(0xAABB_CCDD, 0x1122_3344, 1), 0x3344_CCDD);
     }
 }
+
+impl crate::state::Field for Cop0 {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(self, s; bpc, bda, jumpdest, dcic, bad_vaddr, bdam, bpcm, sr, cause, epc);
+    }
+}
+
+impl crate::state::Field for Cpu {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(
+            self, s; regs, hi, lo, pc, next_pc, current_pc, load_reg, load_val, next_load_reg, next_load_val, in_delay_slot,
+            next_in_delay, cop0, gte, icache_tag, icache_valid, icache_data, muldiv_ready, gte_ready, instructions
+        );
+    }
+}

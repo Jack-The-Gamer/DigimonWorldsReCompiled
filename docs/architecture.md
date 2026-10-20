@@ -86,6 +86,12 @@ Every 4 KiB RAM page holding translated code is flagged on the bus. Stores and D
 
 `EngineKind::Validate` (Settings → CPU engine, or `dwrc-cli run --engine validate`) records every memory access a translated block makes, then replays the block through the reference interpreter from the starting CPU state against that log. Registers, HI/LO, PC, the pending load, COP0, the GTE state, the sequence of reads and the exact writes must all match. A mismatch is reported with a disassembly and the block falls back to the interpreter. The `differential` test in `crates/dwrc-recomp/tests` does the same with random programs and needs no game data, so it runs in CI.
 
+### Save states
+
+`Psx::save_state` writes the whole console to bytes and `Psx::load_state` reads it back (`crates/dwrc-psx/src/state.rs`). Each device lists its fields once, in a `sync` function that either writes or reads them, so the two directions cannot drift apart. Left out on purpose: the BIOS ROM and the disc (a state only loads with the release and BIOS it was saved with; `dwrc-runtime::savestate` checks), code hooks (they belong to the tools and mods running now), memory card contents (loading a state never takes a player's saves back) and output already handed to the host (audio, debug text). A failed load leaves the console as it was. After a load the execution engine forgets its translations (`ExecEngine::flush`). The format carries a version, bumped whenever a device's fields change. A test in `crates/dwrc-runtime/tests/save_state.rs` checks that the frames after a load are bit-identical to the frames after the save, on both engines.
+
+Mods drive them: `dwrc.save_state` / `dwrc.load_state` queue a request that the session carries out between frames, writing `states/<serial>/slot<N>.state` (deflate-compressed, with a JSON header naming the release and BIOS).
+
 ### Native overrides (planned)
 
 The hook mechanism (`Bus::add_hook`) already lets Rust code or Lua scripts take over at any guest address and return to the caller with `ctx:ret()`. The intended path toward a decompilation-style port is to replace game functions one at a time with hand-written Rust, each verified against the original by running both and comparing results, exactly like the recompiler's validator.

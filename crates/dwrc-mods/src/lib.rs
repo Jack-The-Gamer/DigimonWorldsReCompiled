@@ -333,6 +333,29 @@ impl ModRuntime {
         psx.bus.spu.realtime_voices = voices;
     }
 
+    /// Hands a key press on the keyboard to the scripts.
+    pub fn on_key(&mut self, psx: &mut dwrc_psx::Psx, key: &str, shift: bool, ctrl: bool, alt: bool) {
+        let frame = psx.frame_count;
+        for s in &mut self.scripts {
+            if let Err(e) = s.on_key(&mut psx.cpu, &mut psx.bus, frame, key, shift, ctrl, alt) {
+                let msg = format!("[{}] on_key: {e}", s.mod_id());
+                log::warn!("{msg}");
+                self.log.push(msg);
+            }
+        }
+    }
+
+    /// Save state requests from the scripts since the last call (mod id,
+    /// request), in load order.
+    pub fn take_state_requests(&mut self) -> Vec<(String, script::StateRequest)> {
+        self.scripts.iter_mut().flat_map(|s| s.take_requests().into_iter().map(|r| (s.mod_id().to_string(), r)).collect::<Vec<_>>()).collect()
+    }
+
+    /// On-screen messages from the scripts since the last call.
+    pub fn take_notices(&mut self) -> Vec<String> {
+        self.scripts.iter_mut().flat_map(|s| s.take_notices()).collect()
+    }
+
     /// Lets scripts transform the controller state before each frame.
     pub fn filter_input(&mut self, buttons: u16) -> u16 {
         let mut b = buttons;

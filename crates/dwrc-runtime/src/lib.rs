@@ -6,6 +6,7 @@ pub mod bios;
 pub mod config;
 pub mod library;
 pub mod pal60;
+pub mod savestate;
 pub mod paths;
 pub mod session;
 

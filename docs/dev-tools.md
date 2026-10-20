@@ -30,6 +30,7 @@ Build with `cargo build --release -p dwrc-cli`; the tool is `target/release/dwrc
 | `--tty` | echo the BIOS/game debug console |
 | `--card1 FILE.mcd` / `--card2` | use (and afterwards save) memory card images |
 | `--pal60` | run Digimon World 2003 (Europe) in its own 60 Hz mode, as the launcher does by default |
+| `--states DIR` | where save states go (made by mods or the `--serve` commands); default: a folder in the temp directory |
 | `--trace-bios` | list the BIOS functions the game calls (table, number, count, first frame) |
 | `--dump-entry` | print the hardware state when the game's entry point is reached |
 | `--pcs` | sample where the CPU spends its time at the end of the run |
@@ -50,6 +51,8 @@ frame number, and `--mod` folders run as usual.
 | `vram FILE` | write video RAM (1024×512 16-bit pixels, little-endian, row by row) |
 | `peek ADDR [N]` | print N bytes of memory in hex |
 | `poke8` / `poke16` / `poke32 ADDR VALUE` | write memory |
+| `key [shift+\|ctrl+\|alt+]KEY` | a key press for mods (`dwrc.on_key`), e.g. `key shift+1` |
+| `savestate N` / `loadstate N` | save the console to slot N, or load it |
 | `frame` | print the frame number |
 | `quit` | stop |
 

@@ -20,7 +20,7 @@ enum Gp0State {
     Polyline { shaded: bool },
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 struct Download {
     x: u32,
     y: u32,
@@ -745,4 +745,46 @@ pub fn rgb15_to_argb(c: u16) -> u32 {
     // Expand 5-bit to 8-bit the way a DAC would (replicate high bits).
     let x = |v: u32| (v << 3) | (v >> 2);
     0xFF00_0000 | (x(r) << 16) | (x(g) << 8) | x(b)
+}
+
+impl crate::state::Field for Gp0State {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        let (mut tag, mut r) = match *self {
+            Gp0State::Command => (0u8, [0u32; 5]),
+            Gp0State::Upload { x, y, w, h, pos } => (1, [x, y, w, h, pos]),
+            Gp0State::Polyline { shaded } => (2, [shaded as u32, 0, 0, 0, 0]),
+        };
+        tag.sync(s);
+        r.sync(s);
+        if s.loading() {
+            *self = match tag {
+                1 => Gp0State::Upload { x: r[0], y: r[1], w: r[2], h: r[3], pos: r[4] },
+                2 => Gp0State::Polyline { shaded: r[0] != 0 },
+                _ => Gp0State::Command,
+            };
+        }
+    }
+}
+
+impl crate::state::Field for Download {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(self, s; x, y, w, h, pos);
+    }
+}
+
+impl crate::state::Field for DisplayInfo {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(self, s; x, y, width, height, bpp24, interlaced, enabled, pal);
+    }
+}
+
+impl crate::state::Field for Gpu {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(
+            self, s; standard, vram, state, cmd, cmd_len, download, read_latch, texpage, tex_window, draw_x1, draw_y1, draw_x2, draw_y2, off_x,
+            off_y, mask_set, mask_check, rect_flip_x, rect_flip_y, tex_disable_allowed, e2, e3, e4, e5, display_x, display_y, h_start, h_end,
+            v_start, v_end, display_mode, display_disabled, dma_dir, irq_flag, video_clock, line_len, lines, pos, last_sync, line, field,
+            in_vblank, hblank_count, frames, latched
+        );
+    }
 }

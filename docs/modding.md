@@ -218,6 +218,9 @@ Scripts run in an isolated, sandboxed Lua 5.4 state per mod (see *Safety*). The 
 | `dwrc.save()` | write `dwrc.data` now |
 | `dwrc.set_speed(n)`, `dwrc.speed()` | run the console `n` times faster than real time (1 to 4; 1 is normal). The launcher paces itself to match and still plays sound in real time |
 | `dwrc.set_realtime_voices(mask)` | sound chip voices (bit 0 = voice 0 … bit 23) that keep real-time pitch and timing while sped up; the others play faster like the rest of the game |
+| `dwrc.on_key(fn(ctx, key, mods))` | a key pressed on the keyboard while the game runs: `key` is its name (`"1"`, `"A"`, `"F5"`, `"Space"`…, the key's place on the keyboard, so Shift + 1 is `"1"` with `mods.shift`), `mods` has `shift`, `ctrl` and `alt`. Not called for Esc, Tab and F10 to F12, which the launcher uses, or while the game is paused (1.3+) |
+| `dwrc.save_state(slot)`, `dwrc.load_state(slot)` | save the whole console to slot 1 to 99, or load it, once the current frame is done. Slots belong to the release (kept in the data folder's `states/<serial>/`), only load with the BIOS they were saved with, and never include memory cards. The player sees "Saved state 1", "Slot 3 is empty" and the like (1.3+) |
+| `dwrc.notify(text)` | show a short message over the game picture (1.3+) |
 
 The `ctx` passed to callbacks:
 
@@ -262,6 +265,19 @@ dwrc.on_input(function(b)
     n = 0
   end
   return b
+end)
+```
+
+### Example: save states
+
+The [Save States mod](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index/tree/HEAD/mods/Jack-The-Gamer@save-states)
+is this, give or take its comments: keys 1 to 5 save, Shift + 1 to 5 load.
+
+```lua
+dwrc.on_key(function(ctx, key, mods)
+  local slot = tonumber(key)
+  if not slot or slot < 1 or slot > 5 or mods.ctrl or mods.alt then return end
+  if mods.shift then dwrc.load_state(slot) else dwrc.save_state(slot) end
 end)
 ```
 

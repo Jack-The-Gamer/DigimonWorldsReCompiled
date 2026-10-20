@@ -61,6 +61,11 @@ impl Paths {
         self.root.join("cache").join(g.slug())
     }
 
+    /// Save states of one release (by serial).
+    pub fn states_dir(&self, serial: &str) -> PathBuf {
+        self.root.join("states").join(serial)
+    }
+
     pub fn screenshots_dir(&self) -> PathBuf {
         self.root.join("screenshots")
     }

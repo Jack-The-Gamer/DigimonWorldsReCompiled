@@ -378,3 +378,34 @@ impl Mdec {
         }
     }
 }
+
+impl crate::state::Field for Cmd {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        let mut tag: u8 = match *self {
+            Cmd::None => 0,
+            Cmd::Decode => 1,
+            Cmd::QuantTable { color: false } => 2,
+            Cmd::QuantTable { color: true } => 3,
+            Cmd::ScaleTable => 4,
+        };
+        tag.sync(s);
+        if s.loading() {
+            *self = match tag {
+                1 => Cmd::Decode,
+                2 => Cmd::QuantTable { color: false },
+                3 => Cmd::QuantTable { color: true },
+                4 => Cmd::ScaleTable,
+                _ => Cmd::None,
+            };
+        }
+    }
+}
+
+impl crate::state::Field for Mdec {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(
+            self, s; cmd, remaining, depth, signed, set_bit15, enable_in, enable_out, input, in_pos, params, qt_luma, qt_chroma, scale, output,
+            current_block
+        );
+    }
+}

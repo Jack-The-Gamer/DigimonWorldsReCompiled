@@ -4,6 +4,7 @@
 use crate::config::{Config, EngineKind};
 use crate::library::{BiosChoice, DiscStatus, Library};
 use crate::paths::Paths;
+use crate::savestate::StateStore;
 use anyhow::{anyhow, bail, Context, Result};
 use dwrc_disc::ident::Region;
 use dwrc_disc::iso9660::IsoFs;
@@ -32,6 +33,10 @@ pub struct Session {
     pub bios_name: String,
     /// A PAL release running in its own 60 Hz mode (see `pal60`).
     pub sixty_hz: bool,
+    /// This release's save states (used by mods through `dwrc.save_state`).
+    states: StateStore,
+    /// Messages for the screen (from mods and save states).
+    notices: Vec<String>,
 }
 
 /// Information shown before starting (so the UI can explain problems).
@@ -89,6 +94,7 @@ impl Session {
             Region::NtscJ => (VideoStandard::Ntsc, DiscRegion::NtscJ),
             Region::NtscU => (VideoStandard::Ntsc, DiscRegion::NtscU),
         };
+        let states = StateStore::new(paths.states_dir(&ident.serial), &ident.serial, &ident.title, &bios, &bios_name);
         let mut psx = Psx::new(&bios, standard);
         psx.insert_disc(Box::new(disc) as Box<dyn SectorSource>, region);
         let sixty_hz = cfg.video.pal_60hz && crate::pal60::enable(&mut psx, &ident.serial, &exe);
@@ -134,6 +140,8 @@ impl Session {
             engine,
             bios_name,
             sixty_hz,
+            states,
+            notices: Vec::new(),
         })
     }
 
@@ -152,6 +160,7 @@ impl Session {
         self.psx.run_frame();
         self.frame += 1;
         self.mods.on_frame(&mut self.psx, self.frame);
+        self.after_mods();
         let c = self.psx.bus.cycles;
         let dc = c - self.last_frame_cycles;
         self.last_frame_cycles = c;
@@ -159,6 +168,30 @@ impl Session {
         if self.last_flush.elapsed() > Duration::from_secs(2) {
             self.flush_memcards();
         }
+    }
+
+    /// A key pressed on the keyboard while the game runs (for mods).
+    pub fn key(&mut self, key: &str, shift: bool, ctrl: bool, alt: bool) {
+        self.mods.on_key(&mut self.psx, key, shift, ctrl, alt);
+        self.after_mods();
+    }
+
+    /// Carries out what the mods asked for (save states) and collects their
+    /// messages.
+    fn after_mods(&mut self) {
+        let mut loaded = false;
+        let n = crate::savestate::handle_requests(&self.states, &mut self.psx, &mut self.mods, &mut loaded);
+        self.notices.extend(n);
+        self.notices.extend(self.mods.take_notices());
+        if loaded {
+            // The console's clock went back (or forward) with the state.
+            self.last_frame_cycles = self.psx.bus.cycles;
+        }
+    }
+
+    /// Messages for the screen since the last call.
+    pub fn take_notices(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.notices)
     }
 
     /// How many times faster than real time the console runs (set by mods).

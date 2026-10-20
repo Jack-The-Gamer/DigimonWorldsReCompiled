@@ -19,3 +19,4 @@ sha1.workspace = true
 hex.workspace = true
 directories.workspace = true
 png.workspace = true
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }

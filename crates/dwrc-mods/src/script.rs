@@ -17,6 +17,11 @@
 //! dwrc.speed()           -- the current speed
 //! dwrc.set_realtime_voices(mask) -- sound chip voices (bit per voice) that keep
 //!                          real-time pitch and timing while sped up
+//! dwrc.on_key(function(ctx, key, mods) ... end) -- a key pressed on the keyboard
+//!                          (`key` as "1", "A", "F5"…; `mods.shift/ctrl/alt`)
+//! dwrc.save_state(slot)  -- save the console to slot 1..99 after this frame
+//! dwrc.load_state(slot)  -- load slot 1..99 after this frame
+//! dwrc.notify(text)      -- a short message on screen
 //! ```
 //!
 //! `dwrc.on_exec` may also be called later (from `on_frame`, say, once the
@@ -47,9 +52,22 @@ use std::sync::{Arc, Mutex};
 
 const REG_NAMES: [&str; 32] = dwrc_mips::REG_NAMES;
 
+/// What a script asked the host to do with save states (done between frames).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StateRequest {
+    Save(u32),
+    Load(u32),
+}
+
+/// Highest save state slot a script may use.
+pub const MAX_STATE_SLOT: u32 = 99;
+
 struct HostState {
     input_cbs: Vec<RegistryKey>,
     frame_cbs: Vec<RegistryKey>,
+    key_cbs: Vec<RegistryKey>,
+    requests: Vec<StateRequest>,
+    notices: Vec<String>,
     exec_hooks: Vec<(u32, Arc<RegistryKey>)>,
     /// Requested console speed (1 = real time).
     speed: u32,
@@ -59,7 +77,16 @@ struct HostState {
 
 impl HostState {
     fn new() -> Self {
-        Self { input_cbs: Vec::new(), frame_cbs: Vec::new(), exec_hooks: Vec::new(), speed: 1, realtime_voices: 0 }
+        Self {
+            input_cbs: Vec::new(),
+            frame_cbs: Vec::new(),
+            key_cbs: Vec::new(),
+            requests: Vec::new(),
+            notices: Vec::new(),
+            exec_hooks: Vec::new(),
+            speed: 1,
+            realtime_voices: 0,
+        }
     }
 }
 
@@ -350,6 +377,44 @@ impl ScriptHost {
                 .map_err(le)?,
             )
             .map_err(le)?;
+            let st = state.clone();
+            api.set(
+                "on_key",
+                lua.create_function(move |lua, f: Function| {
+                    let key = lua.create_registry_value(f)?;
+                    st.lock().unwrap().key_cbs.push(key);
+                    Ok(())
+                })
+                .map_err(le)?,
+            )
+            .map_err(le)?;
+            for (name, save) in [("save_state", true), ("load_state", false)] {
+                let st = state.clone();
+                api.set(
+                    name,
+                    lua.create_function(move |_, slot: i64| {
+                        if !(1..=MAX_STATE_SLOT as i64).contains(&slot) {
+                            return Err(mlua::Error::runtime(format!("save state slot must be 1 to {MAX_STATE_SLOT}")));
+                        }
+                        let slot = slot as u32;
+                        st.lock().unwrap().requests.push(if save { StateRequest::Save(slot) } else { StateRequest::Load(slot) });
+                        Ok(())
+                    })
+                    .map_err(le)?,
+                )
+                .map_err(le)?;
+            }
+            let st = state.clone();
+            api.set(
+                "notify",
+                lua.create_function(move |_, text: String| {
+                    let text: String = text.chars().take(200).collect();
+                    st.lock().unwrap().notices.push(text);
+                    Ok(())
+                })
+                .map_err(le)?,
+            )
+            .map_err(le)?;
             let buttons = lua.create_table().map_err(le)?;
             for b in Button::ALL {
                 buttons.set(format!("{b:?}"), 1u32 << (b as u32)).map_err(le)?;
@@ -477,6 +542,43 @@ impl ScriptHost {
         .map_err(|e| anyhow!("{e}"))
     }
 
+    /// A key pressed on the keyboard (egui's name for it, e.g. "1" or "F5").
+    pub fn on_key(&mut self, cpu: &mut Cpu, bus: &mut Bus, frame: u64, key: &str, shift: bool, ctrl: bool, alt: bool) -> Result<()> {
+        let lua = &self.lua;
+        let fns = {
+            let st = self.state.lock().unwrap();
+            st.key_cbs.iter().map(|k| lua.registry_value::<Function>(k)).collect::<mlua::Result<Vec<_>>>().map_err(|e| anyhow!("{e}"))?
+        };
+        if !fns.is_empty() {
+            let mods = lua.create_table().map_err(|e| anyhow!("{e}"))?;
+            for (k, v) in [("shift", shift), ("ctrl", ctrl), ("alt", alt)] {
+                mods.set(k, v).map_err(|e| anyhow!("{e}"))?;
+            }
+            lua.scope(|scope| {
+                let ctx = scope.create_userdata(Ctx { cpu, bus: &mut *bus, frame })?;
+                for f in &fns {
+                    f.call::<()>((&ctx, key, mods.clone()))?;
+                }
+                Ok(())
+            })
+            .map_err(|e| anyhow!("{e}"))?;
+        }
+        if self.state.lock().unwrap().exec_hooks.len() > self.installed.len() {
+            self.install_hooks(bus);
+        }
+        Ok(())
+    }
+
+    /// Save state requests made since the last call, in order.
+    pub fn take_requests(&mut self) -> Vec<StateRequest> {
+        std::mem::take(&mut self.state.lock().unwrap().requests)
+    }
+
+    /// Messages for the screen (`dwrc.notify`) since the last call.
+    pub fn take_notices(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.state.lock().unwrap().notices)
+    }
+
     pub fn filter_input(&mut self, buttons: u16) -> Result<u16> {
         let fns = {
             let st = self.state.lock().unwrap();
@@ -570,6 +672,37 @@ mod tests {
         assert_eq!(host.installed.len(), 1);
         assert!(parse_pattern("1234567").is_none() && parse_pattern("1234567g").is_none() && parse_pattern("").is_none());
         assert_eq!(parse_pattern("0c?????? 0000b821"), Some(vec![(0x0C00_0000, 0xFF00_0000), (0x0000_B821, 0xFFFF_FFFF)]));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn keys_save_states_and_notices() {
+        let d = std::env::temp_dir().join(format!("dwrc-keys-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("main.lua"),
+            r#"
+            dwrc.on_key(function(ctx, key, mods)
+              assert(ctx:read32(0x80000000) == 0)
+              local slot = tonumber(key)
+              if slot then
+                if mods.shift then dwrc.load_state(slot) else dwrc.save_state(slot) end
+              else
+                dwrc.notify("key " .. key .. (mods.ctrl and " with ctrl" or ""))
+              end
+            end)
+            assert(not pcall(dwrc.save_state, 0) and not pcall(dwrc.load_state, 100))
+            "#,
+        )
+        .unwrap();
+        let mut host = ScriptHost::load("t", dwrc_disc::GameId::Dw3, "SLES-03936", &d.join("main.lua"), Default::default(), d.join("data")).unwrap();
+        let mut psx = dwrc_psx::Psx::new(&vec![0u8; 512 * 1024], dwrc_psx::VideoStandard::Pal);
+        host.on_key(&mut psx.cpu, &mut psx.bus, 1, "2", false, false, false).unwrap();
+        host.on_key(&mut psx.cpu, &mut psx.bus, 1, "2", true, false, false).unwrap();
+        host.on_key(&mut psx.cpu, &mut psx.bus, 1, "F5", false, true, false).unwrap();
+        assert_eq!(host.take_requests(), vec![StateRequest::Save(2), StateRequest::Load(2)]);
+        assert!(host.take_requests().is_empty());
+        assert_eq!(host.take_notices(), vec!["key F5 with ctrl".to_string()]);
         let _ = std::fs::remove_dir_all(&d);
     }
 }

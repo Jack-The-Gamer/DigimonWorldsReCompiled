@@ -978,3 +978,20 @@ impl Bus {
 
 /// Extra cycles a RAM data read stalls the CPU.
 pub const RAM_READ_CYCLES: u64 = 4;
+
+/// The BIOS ROM, code hooks and debug output stay as they are; the memory
+/// timings are worked out again from the restored registers, and every page
+/// counts as changed so translated code is thrown away.
+impl crate::state::Field for Bus {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(
+            self, s; ram, scratch, memctrl, ram_size_reg, cache_ctrl, irq, dma, timers, gpu, cdrom, spu, mdec, sio, cycles, next_event, events, cap,
+            frame_done, post
+        );
+        if s.loading() {
+            self.recompute_timings();
+            self.clear_code_pages();
+            self.invalidation = Invalidation::default();
+        }
+    }
+}

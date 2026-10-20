@@ -39,3 +39,9 @@ impl Irq {
         self.stat & self.mask != 0
     }
 }
+
+impl crate::state::Field for Irq {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(self, s; stat, mask);
+    }
+}

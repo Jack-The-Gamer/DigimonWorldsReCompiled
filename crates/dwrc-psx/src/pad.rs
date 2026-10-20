@@ -114,3 +114,16 @@ impl Pad {
         r
     }
 }
+
+impl crate::state::Field for PadState {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(self, s; buttons);
+    }
+}
+
+/// The buttons held are not restored: they are whatever the player holds now.
+impl crate::state::Field for Pad {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(self, s; connected, step);
+    }
+}

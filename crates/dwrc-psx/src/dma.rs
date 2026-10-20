@@ -214,3 +214,15 @@ impl Dma {
         log::trace!("DMA {:?} done, DICR now {:08x} (irq edge {})", p, self.dicr(), !before && self.master_flag());
     }
 }
+
+impl crate::state::Field for Channel {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(self, s; base, block_control, control);
+    }
+}
+
+impl crate::state::Field for Dma {
+    fn sync(&mut self, s: &mut crate::state::Sync) {
+        crate::sync_fields!(self, s; control, irq_enable, irq_flags, force_irq, master_irq_enable, irq_dummy, channels);
+    }
+}

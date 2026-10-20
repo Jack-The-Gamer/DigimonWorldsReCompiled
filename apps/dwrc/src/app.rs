@@ -76,6 +76,8 @@ pub struct App {
     crt_error: Option<String>,
     /// Height of the Games page content last frame (to centre it).
     library_h: f32,
+    /// Short messages over the game picture (mods, save states), newest last.
+    osd: Vec<(String, Instant)>,
 }
 
 impl App {
@@ -111,6 +113,7 @@ impl App {
             crt,
             crt_error,
             library_h: 0.0,
+            osd: Vec::new(),
             files_hovering: false,
             open_files,
             paths,
@@ -889,6 +892,31 @@ impl App {
         }
         emu.shared.paused.store(overlay_open, Ordering::Relaxed);
         emu.shared.fast_forward.store(tab && !overlay_open, Ordering::Relaxed);
+        // Key presses go to the mods too (save states and the like), except
+        // the keys the launcher itself uses. The physical key is used, so
+        // Shift+1 is "1" with shift held on any keyboard layout.
+        if !overlay_open {
+            let keys: Vec<(egui::Key, egui::Modifiers)> = ctx.input(|i| {
+                i.events
+                    .iter()
+                    .filter_map(|e| match e {
+                        egui::Event::Key { key, physical_key, pressed: true, repeat: false, modifiers } => Some((physical_key.unwrap_or(*key), *modifiers)),
+                        _ => None,
+                    })
+                    .filter(|(k, _)| !matches!(k, Key::Escape | Key::F10 | Key::F11 | Key::F12 | Key::Tab))
+                    .collect()
+            });
+            for (k, m) in keys {
+                emu.send(EmuCmd::Key { key: k.name().to_string(), shift: m.shift, ctrl: m.ctrl, alt: m.alt });
+            }
+        }
+        for n in std::mem::take(&mut *emu.shared.notices.lock().unwrap()) {
+            self.osd.push((n, Instant::now()));
+        }
+        self.osd.retain(|(_, t)| t.elapsed() < OSD_TIME);
+        if self.osd.len() > 4 {
+            self.osd.drain(..self.osd.len() - 4);
+        }
         // Frame upload
         {
             let f = emu.shared.frame.lock().unwrap();
@@ -970,6 +998,13 @@ impl App {
             }
             if status.mod_speed > 1 {
                 fast_forward_badge(ui.painter(), avail.right_top() + Vec2::new(-12.0, 10.0), status.mod_speed);
+            }
+            let top = if self.cfg.video.show_fps { 30.0 } else { 10.0 };
+            for (i, (msg, t)) in self.osd.iter().enumerate() {
+                osd_message(ui.painter(), avail.left_top() + Vec2::new(12.0, top + i as f32 * 32.0), msg, t.elapsed());
+            }
+            if !self.osd.is_empty() {
+                ctx.request_repaint_after(Duration::from_millis(100));
             }
         });
         if self.show_pause {
@@ -1278,6 +1313,20 @@ pub(crate) fn open_folder(p: &std::path::Path) {
 
 /// The "sped up" badge shown while a mod runs the game faster: two
 /// triangles and the factor, right-aligned at `at`.
+/// How long a message stays over the game picture.
+const OSD_TIME: Duration = Duration::from_millis(2500);
+
+/// A short message over the game picture, fading out at the end.
+fn osd_message(p: &egui::Painter, at: egui::Pos2, msg: &str, age: Duration) {
+    let left = OSD_TIME.saturating_sub(age).as_secs_f32();
+    let a = (left / 0.4).clamp(0.0, 1.0);
+    let fg = Color32::from_rgba_unmultiplied(255, 255, 255, (235.0 * a) as u8);
+    let text = p.layout_no_wrap(msg.to_string(), egui::FontId::proportional(17.0), fg);
+    let rect = egui::Rect::from_min_size(at, text.size() + Vec2::new(20.0, 10.0));
+    p.rect_filled(rect, 6.0, Color32::from_rgba_unmultiplied(0, 0, 0, (160.0 * a) as u8));
+    p.galley(rect.min + Vec2::new(10.0, 5.0), text, fg);
+}
+
 fn fast_forward_badge(p: &egui::Painter, at: egui::Pos2, speed: u32) {
     let fg = Color32::from_rgba_unmultiplied(255, 255, 255, 230);
     let font = egui::FontId::proportional(18.0);
