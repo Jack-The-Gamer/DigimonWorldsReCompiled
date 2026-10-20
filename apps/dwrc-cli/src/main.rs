@@ -98,7 +98,9 @@ fn run(args: &[String]) -> Result<()> {
         Some(p) => std::fs::read(p)?,
         None => dwrc_runtime::bios::BUILTIN_BIOS.to_vec(),
     };
-    let mut disc = Disc::open(&cue)?;
+    // Opened as the launcher does: a .cue that leads nowhere falls back to
+    // its .bin, and a .bin skips a .cue that names another file.
+    let mut disc = Disc::open(&dwrc_runtime::library::resolve_disc_path(&cue))?;
     let ident = dwrc_disc::identify(&mut disc)?.context("disc not recognised")?;
     println!("{} ({}) region {:?}", ident.title, ident.serial, ident.region);
     let (std, region) = match ident.region {

@@ -147,20 +147,57 @@ pub fn resolve_disc_path(p: &Path) -> PathBuf {
     p.to_path_buf()
 }
 
+/// What to try opening for a disc path, best first: [`resolve_disc_path`],
+/// then, when that is a `.cue`, the `.bin` it names and the `.bin` named like
+/// it, and for a `.bin` the `.bin` on its own. A `.cue` that is there but
+/// unusable (bad syntax, an odd track layout) so never stops its `.bin`.
+fn open_candidates(p: &Path) -> Vec<PathBuf> {
+    let first = resolve_disc_path(p);
+    let mut v = vec![first.clone()];
+    if has_ext(&first, "cue") {
+        v.extend(cue_files(&first).into_iter().flatten().filter(|f| f.exists()));
+        v.extend(["bin", "BIN"].iter().map(|e| first.with_extension(e)).filter(|b| b.exists()));
+    }
+    if has_ext(p, "bin") {
+        v.push(p.to_path_buf());
+    }
+    let mut out: Vec<PathBuf> = Vec::new();
+    for c in v {
+        if !out.iter().any(|o| same_file(o, &c)) {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// The image file behind a disc path (the `.bin` a `.cue` names).
 fn image_file(disc_path: &Path) -> Option<PathBuf> {
     Disc::open(disc_path).ok().and_then(|d| d.file_paths().into_iter().next())
 }
 
+/// Opens an imported disc: through its `.cue` when that still works,
+/// otherwise its `.bin` on its own (a `.cue` deleted or changed since).
+pub fn open_disc(e: &GameEntry) -> Result<Disc> {
+    match Disc::open(&e.disc_path) {
+        Ok(d) => Ok(d),
+        Err(err) if !e.bin.as_os_str().is_empty() && e.bin.exists() && !same_file(&e.bin, &e.disc_path) => {
+            log::info!("{} could not be used ({err}); opening {} on its own", e.disc_path.display(), e.bin.display());
+            Disc::open(&e.bin).with_context(|| format!("could not open {}", e.bin.display()))
+        }
+        Err(err) => Err(anyhow!("could not open {}: {err}", e.disc_path.display())),
+    }
+}
+
 /// Whether an imported disc is still there, unchanged since it was verified.
+/// The image file is what counts; its `.cue` may have gone (see [`open_disc`]).
 pub fn disc_status(e: &GameEntry) -> DiscStatus {
-    let bin = if e.bin.as_os_str().is_empty() || !e.disc_path.exists() {
+    let bin = if !e.bin.as_os_str().is_empty() && e.bin.exists() {
+        e.bin.clone()
+    } else {
         match image_file(&e.disc_path) {
             Some(b) => b,
             None => return DiscStatus::Missing,
         }
-    } else {
-        e.bin.clone()
     };
     match file_stamp(&bin) {
         None => DiscStatus::Missing,
@@ -285,11 +322,31 @@ impl Library {
     }
 
     fn import(&mut self, path: &Path, choose: bool, progress: &mut dyn FnMut(f32)) -> Result<GameId> {
-        let disc_path = resolve_disc_path(path);
-        let mut disc = Disc::open(&disc_path).with_context(|| format!("could not open {}", disc_path.display()))?;
-        let ident = dwrc_disc::identify(&mut disc)
-            .map_err(|e| anyhow!("{e}"))?
-            .ok_or_else(|| anyhow!("{} is not a supported Digimon World disc", disc_path.display()))?;
+        // The first way of opening it that gives a supported disc wins; the
+        // error reported is the first one.
+        let mut first_err = None;
+        let mut found = None;
+        for p in open_candidates(path) {
+            let r = Disc::open(&p).map_err(|e| anyhow!("could not open {}: {e}", p.display())).and_then(|mut d| {
+                match dwrc_disc::identify(&mut d) {
+                    Ok(Some(ident)) => Ok((d, ident)),
+                    Ok(None) => Err(anyhow!("{} is not a supported Digimon World disc", p.display())),
+                    Err(e) => Err(anyhow!("{}: {e}", p.display())),
+                }
+            });
+            match r {
+                Ok((d, ident)) => {
+                    found = Some((p, d, ident));
+                    break;
+                }
+                Err(e) => {
+                    first_err.get_or_insert(e);
+                }
+            }
+        }
+        let Some((disc_path, disc, ident)) = found else {
+            return Err(first_err.unwrap_or_else(|| anyhow!("nothing to open at {}", path.display())));
+        };
         let files = disc.file_paths();
         if files.len() != 1 {
             bail!("multi-file images are not supported (found {} files)", files.len());
@@ -363,11 +420,10 @@ impl Library {
             if !(has_ext(p, "cue") || (has_ext(p, "bin") && len > 50 << 20)) {
                 continue;
             }
-            let open = resolve_disc_path(p);
-            let Some(bin) = image_file(&open) else {
-                if has_ext(p, "cue") {
-                    report.skipped.push((p.clone(), "the .bin it names is missing".into()));
-                }
+            // A .cue that leads to nothing (its .bin gone, none named like it)
+            // is ignored; a .bin is opened through its .cue only if that works.
+            let Some((open, bin)) = open_candidates(p).into_iter().find_map(|o| image_file(&o).map(|b| (o, b))) else {
+                log::info!("ignoring {}: no disc image found through it", p.display());
                 continue;
             };
             let named_like = |o: &Path| has_ext(o, "cue") && o.file_stem() == bin.file_stem();
@@ -478,6 +534,45 @@ mod tests {
         assert_eq!(resolve_disc_path(&d.join("Game (Japan).bin")), d.join("Game (Japan).bin"));
         let img = image_file(&resolve_disc_path(&d.join("Game (Japan).cue"))).unwrap();
         assert!(same_file(&img, &d.join("Game (Japan).bin")));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn cues_that_lead_nowhere_or_do_not_fit() {
+        let d = tmp("orphans");
+        // A .cue whose .bin is gone, with nothing named like it: ignored.
+        std::fs::write(d.join("Gone.cue"), cue_for("Gone (Rev 1).bin")).unwrap();
+        // A .bin whose .cue can't be read: the .bin is used on its own.
+        fake_bin(&d.join("Game.bin"));
+        std::fs::write(d.join("Game.cue"), "FILE \"Game.bin\" BINARY
+  TRACK 01 NONSENSE
+").unwrap();
+        assert_eq!(resolve_disc_path(&d.join("Game.bin")), d.join("Game.bin"));
+        assert!(open_candidates(&d.join("Gone.cue")).iter().all(|c| image_file(c).is_none()));
+        let mut lib = Library::default();
+        // Neither is a game (the fake image has no filesystem), and the
+        // orphaned .cue is not even mentioned.
+        let report = lib.scan_folder(&d, &mut |_, _| {});
+        assert!(report.games.is_empty());
+        assert!(report.skipped.iter().all(|(p, _)| p.file_name().unwrap() != "Gone.cue"), "{:?}", report.skipped);
+        // Picked by hand, a .cue that leads nowhere still says why.
+        assert!(lib.import_disc(&d.join("Gone.cue"), &mut |_| {}).is_err());
+
+        // An imported disc whose .cue breaks or goes away still opens, and
+        // still counts as ready.
+        std::fs::write(d.join("Game.cue"), cue_for("Game.bin")).unwrap();
+        let mut e = entry(GameId::Dw1, "SLUS-01032", Region::NtscU, &d.join("Game.bin"), true);
+        e.disc_path = d.join("Game.cue");
+        assert!(open_disc(&e).is_ok());
+        std::fs::write(d.join("Game.cue"), "FILE \"Elsewhere.bin\" BINARY
+  TRACK 01 MODE2/2352
+    INDEX 01 00:00:00
+").unwrap();
+        assert!(open_disc(&e).is_ok());
+        assert_eq!(disc_status(&e), DiscStatus::Ready);
+        std::fs::remove_file(d.join("Game.cue")).unwrap();
+        assert!(open_disc(&e).is_ok());
+        assert_eq!(disc_status(&e), DiscStatus::Ready);
         let _ = std::fs::remove_dir_all(&d);
     }
 

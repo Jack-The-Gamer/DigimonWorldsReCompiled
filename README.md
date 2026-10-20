@@ -70,7 +70,7 @@ These releases are also recognised and run, but no dump of them is on the verifi
 | Digimon World 3 (USA) | SLUS-01436 |
 | Digimon World 3: Aratanaru Bouken no Tobira (Japan) | SLPS-03446 |
 
-Other dumps of the verified releases are accepted with the same note. A `.cue` file is optional; one that names a `.bin` that has since been renamed is worked around by using the `.bin` with the cue's own name.
+Other dumps of the verified releases are accepted with the same note. A `.cue` file is optional, and a wrong one never stops a disc: a `.cue` whose `.bin` was renamed opens the `.bin` named like the `.cue`; a `.cue` that leads to no image at all is ignored; and a `.bin` whose `.cue` names another file, or can't be read, runs on its own.
 
 ### BIOS (optional)
 

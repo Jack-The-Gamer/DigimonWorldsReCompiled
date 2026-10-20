@@ -8,7 +8,7 @@ use crate::savestate::StateStore;
 use anyhow::{anyhow, bail, Context, Result};
 use dwrc_disc::ident::Region;
 use dwrc_disc::iso9660::IsoFs;
-use dwrc_disc::{Disc, GameId, Identification, PsxExe, SectorSource};
+use dwrc_disc::{GameId, Identification, PsxExe, SectorSource};
 use dwrc_mods::{EnabledMod, ModRuntime};
 use dwrc_psx::cdrom::DiscRegion;
 use dwrc_psx::memcard::{MemoryCard, CARD_SIZE};
@@ -73,7 +73,7 @@ impl Session {
             BiosChoice::BuiltIn => (crate::bios::BUILTIN_BIOS.to_vec(), false),
         };
 
-        let mut disc = Disc::open(&entry.disc_path)?;
+        let mut disc = crate::library::open_disc(entry)?;
 
         // Mods: disc overrides first (they edit the virtual disc).
         let enabled_mods: Vec<String> = mods.iter().map(|m| m.info.id().to_string()).collect();
