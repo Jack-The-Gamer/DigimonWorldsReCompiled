@@ -156,6 +156,10 @@ fn run(args: &[String]) -> Result<()> {
     match opt(args, "--engine").unwrap_or("interp") {
         "recomp" => psx.set_engine(dwrc_recomp::new_engine(dwrc_recomp::Mode::Native)),
         "validate" => psx.set_engine(dwrc_recomp::new_engine(dwrc_recomp::Mode::Validate)),
+        // The recompiler translating each block before it first runs, or
+        // never (every block on the interpreter, with translated timing).
+        "recomp-inline" => psx.set_engine(dwrc_recomp::new_engine_with(dwrc_recomp::Mode::Native, dwrc_recomp::Translation::Inline)),
+        "recomp-off" => psx.set_engine(dwrc_recomp::new_engine_with(dwrc_recomp::Mode::Native, dwrc_recomp::Translation::Off)),
         _ => {}
     }
     psx.bus.tty_echo = tty;
@@ -341,6 +345,7 @@ fn run(args: &[String]) -> Result<()> {
 /// key [shift+|ctrl+|alt+]<key>     a key press for mods (dwrc.on_key), e.g. key shift+1
 /// savestate <slot> / loadstate <slot>
 /// pcs <frames> [lo hi]             sample where the CPU runs (optionally only lo..hi)
+/// prof <frames> [ms] [BTN[+BTN]]   host time per frame (buttons held); lists frames slower than ms
 /// frame                            print the frame number
 /// quit
 /// ```
@@ -446,6 +451,29 @@ fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button
             ["poke32", a, v] => {
                 psx.bus.poke32(num(a)?, num(v)?);
                 Ok(String::new())
+            }
+            ["prof", n, rest @ ..] => {
+                // Host time per frame over n frames: the frames slower than
+                // the threshold (ms, default 12), with the time spent
+                // translating code in them.
+                let thr: f64 = rest.first().map(|t| t.parse()).transpose()?.unwrap_or(12.0);
+                let held = match rest.get(1) {
+                    Some(b) => b.split('+').map(|b| parse_button(b).context("unknown button")).collect::<Result<Vec<_>>>()?,
+                    None => Vec::new(),
+                };
+                let (mut total, mut worst, mut slow) = (0.0f64, 0.0f64, Vec::new());
+                let n = num(n)?;
+                for _ in 0..n {
+                    let (t0, c0) = (std::time::Instant::now(), psx.engine_translate_ms());
+                    step(psx, mods, &held, &mut frame, &mut notes);
+                    let (dt, dc) = (t0.elapsed().as_secs_f64() * 1000.0, psx.engine_translate_ms() - c0);
+                    total += dt;
+                    worst = worst.max(dt);
+                    if dt > thr {
+                        slow.push(format!("{frame}:{dt:.1}ms(translate {dc:.1})"));
+                    }
+                }
+                Ok(format!("{n} frames, avg {:.2} ms, worst {worst:.1} ms; slow: {}", total / n.max(1) as f64, slow.join(" ")))
             }
             ["pcs", n, rest @ ..] => {
                 // Where the CPU spends its time over n frames (the PC sampled

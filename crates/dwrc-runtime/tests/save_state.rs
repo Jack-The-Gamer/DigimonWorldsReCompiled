@@ -91,3 +91,39 @@ fn damaged_states_change_nothing() {
     assert!(psx.load_state(&longer).is_err());
     assert_eq!(digest(&psx), before);
 }
+
+/// Fast boot jumps from the BIOS shell entry (0x80030000) to the game. A
+/// state saved in the game and loaded into a fresh console must not leave
+/// that hook armed: the game's own code there would restart the game.
+#[test]
+fn fast_boot_follows_the_state() {
+    let dir = std::env::temp_dir().join(format!("dwrc-states-{}", std::process::id()));
+    let store = dwrc_runtime::savestate::StateStore::new(dir.clone(), "SLUS-00000", "Test", BUILTIN_BIOS, "OpenBIOS");
+    let exe = dwrc_disc::PsxExe {
+        pc: 0x8001_0000,
+        gp: 0,
+        load_addr: 0x8001_0000,
+        text_size: 4,
+        bss_addr: 0,
+        bss_size: 0,
+        sp_base: 0x801F_FF00,
+        sp_offset: 0,
+        region_marker: String::new(),
+        text: vec![0; 4],
+    };
+    let mut psx = console(false);
+    psx.enable_fast_boot(exe.clone());
+    play(&mut psx, 2);
+    assert!(psx.fast_boot_pending());
+    store.save(&mut psx, 1).unwrap();
+    psx.set_fast_boot_pending(false); // as when the hook has run
+    store.save(&mut psx, 2).unwrap();
+
+    let mut fresh = console(false);
+    fresh.enable_fast_boot(exe);
+    store.load(&mut fresh, 2).unwrap();
+    assert!(!fresh.fast_boot_pending(), "in-game state left fast boot armed");
+    store.load(&mut fresh, 1).unwrap();
+    assert!(fresh.fast_boot_pending(), "boot-time state did not re-arm fast boot");
+    let _ = std::fs::remove_dir_all(dir);
+}

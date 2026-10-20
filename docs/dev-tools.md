@@ -22,7 +22,7 @@ Build with `cargo build --release -p dwrc-cli`; the tool is `target/release/dwrc
 |---|---|
 | `--frames N` | frames to run (default 600) |
 | `--fast` | fast boot (with `--bios` only) |
-| `--engine interp\|recomp\|validate` | CPU engine (default interp) |
+| `--engine interp\|recomp\|validate` | CPU engine (default interp). Two more for working on the recompiler: `recomp-inline` translates each block before it first runs (as check mode does), `recomp-off` never translates (every block on the interpreter, with translated timing); both end in exactly the same state as `recomp` |
 | `--shots DIR --every K` | save a PNG every K frames, plus `vram.png` at the end |
 | `--wav FILE` | record audio |
 | `--input "frame:button:len,..."` | scripted input, e.g. `1000:start:10,1200:x:6` (buttons: start select x o t s up down left right l1 r1 l2 r2) |
@@ -54,6 +54,7 @@ frame number, and `--mod` folders run as usual.
 | `key [shift+\|ctrl+\|alt+]KEY` | a key press for mods (`dwrc.on_key`), e.g. `key shift+1` |
 | `savestate N` / `loadstate N` | save the console to slot N, or load it |
 | `pcs N [LO HI]` | run N frames and list the 40 addresses where the CPU spent most time (sampled every 57 cycles), optionally only between `LO` and `HI`: a quick way to find the code behind what's on screen |
+| `prof N [MS] [BTN[+BTN…]]` | run N frames (holding the buttons) and time each on the host: the average, the worst, and every frame slower than `MS` (default 12), with the time spent translating code on the emulation thread in it (only with `recomp-inline` or `validate`; `recomp` translates in the background) |
 | `frame` | print the frame number |
 | `quit` | stop |
 

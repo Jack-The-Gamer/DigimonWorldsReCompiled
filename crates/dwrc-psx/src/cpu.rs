@@ -87,8 +87,9 @@ pub struct Cpu {
     /// Load in flight from the previous instruction (0 = none).
     pub load_reg: usize,
     pub load_val: u32,
-    next_load_reg: usize,
-    next_load_val: u32,
+    /// Load issued by the instruction executing now.
+    pub next_load_reg: usize,
+    pub next_load_val: u32,
     /// The instruction currently executing is in a branch delay slot.
     pub in_delay_slot: bool,
     /// The next instruction will be in a delay slot.
@@ -103,6 +104,8 @@ pub struct Cpu {
     /// Capture BIOS putchar (B0:3D / A0:3C) into `bus.tty`.
     pub trace_tty: bool,
     pub instructions: u64,
+    /// Exceptions and interrupts taken (a statistic, not part of states).
+    pub exceptions: u64,
 }
 
 impl Default for Cpu {
@@ -135,6 +138,7 @@ impl Cpu {
             gte_ready: 0,
             trace_tty: true,
             instructions: 0,
+            exceptions: 0,
         }
     }
 
@@ -229,6 +233,7 @@ impl Cpu {
         self.pc = handler;
         self.next_pc = handler.wrapping_add(4);
         self.next_in_delay = false;
+        self.exceptions += 1;
     }
 
     /// Takes a hardware interrupt before executing the instruction at `pc`.

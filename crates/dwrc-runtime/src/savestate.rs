@@ -27,6 +27,10 @@ struct Header {
     bios_name: String,
     saved_at: u64,
     frame: u64,
+    /// Saved before fast boot handed over to the game (absent in older
+    /// states, which were all saved in the game).
+    #[serde(default)]
+    booting: bool,
 }
 
 /// Where one release's save states live, and what they must match.
@@ -57,6 +61,7 @@ impl StateStore {
             bios_name: self.bios_name.clone(),
             saved_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
             frame: psx.frame_count,
+            booting: psx.fast_boot_pending(),
         };
         let head = serde_json::to_vec(&header)?;
         let mut out = Vec::with_capacity(1 << 20);
@@ -89,7 +94,9 @@ impl StateStore {
         }
         let mut state = Vec::with_capacity(4 << 20);
         flate2::read::ZlibDecoder::new(body).read_to_end(&mut state).map_err(|_| anyhow!("slot {slot} is damaged"))?;
-        psx.load_state(&state).map_err(|e| anyhow!("slot {slot}: {e}"))
+        psx.load_state(&state).map_err(|e| anyhow!("slot {slot}: {e}"))?;
+        psx.set_fast_boot_pending(header.booting);
+        Ok(())
     }
 }
 

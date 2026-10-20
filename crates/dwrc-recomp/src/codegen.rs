@@ -78,6 +78,15 @@ impl Compiler {
         unsafe { old.module.free_memory() };
     }
 
+    /// Drops all generated code for good.
+    ///
+    /// # Safety
+    /// No translated code may run afterwards: every function pointer handed
+    /// out must have been forgotten.
+    pub unsafe fn free(self) {
+        unsafe { self.module.free_memory() };
+    }
+
     pub fn compile(&mut self, blk: &BlockInfo) -> Option<BlockFn> {
         self.ctx.func.signature.params.clear();
         self.ctx.func.signature.returns.clear();

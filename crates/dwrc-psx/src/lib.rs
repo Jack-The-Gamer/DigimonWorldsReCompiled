@@ -51,6 +51,11 @@ pub trait ExecEngine: Send {
     fn invalidate(&mut self, _start: u32, _len: u32) {}
     /// Forgets everything derived from memory (a save state was loaded).
     fn flush(&mut self, _bus: &mut Bus) {}
+    /// Host time the emulation thread has spent translating code so far, in
+    /// milliseconds (tools; translation on other threads is not counted).
+    fn translate_ms(&self) -> f64 {
+        0.0
+    }
     fn name(&self) -> &'static str;
     /// Human-readable statistics (shown by tools).
     fn report(&self) -> String {
@@ -89,6 +94,8 @@ pub struct Psx {
     pub bus: Bus,
     engine: Box<dyn ExecEngine>,
     pub frame_count: u64,
+    /// The executable fast boot side-loads (host state, kept to re-arm it).
+    fast_boot: Option<dwrc_disc::PsxExe>,
 }
 
 impl Psx {
@@ -96,7 +103,7 @@ impl Psx {
         let bus = Bus::new(bios, standard);
         let mut cpu = Cpu::new();
         cpu.reset();
-        Self { cpu, bus, engine: Box::new(Interpreter), frame_count: 0 }
+        Self { cpu, bus, engine: Box::new(Interpreter), frame_count: 0, fast_boot: None }
     }
 
     pub fn set_engine(&mut self, engine: Box<dyn ExecEngine>) {
@@ -109,6 +116,10 @@ impl Psx {
 
     pub fn engine_report(&self) -> String {
         self.engine.report()
+    }
+
+    pub fn engine_translate_ms(&self) -> f64 {
+        self.engine.translate_ms()
     }
 
     pub fn reset(&mut self) {
@@ -161,7 +172,12 @@ impl Psx {
     /// entry point, skipping the boot animation (fast boot). The kernel is
     /// fully initialised by then, exactly as for a normal disc boot.
     pub fn enable_fast_boot(&mut self, exe: dwrc_disc::PsxExe) {
-        let mut exe = Some(exe);
+        self.fast_boot = Some(exe);
+        self.arm_fast_boot();
+    }
+
+    fn arm_fast_boot(&mut self) {
+        let mut exe = self.fast_boot.clone();
         self.bus.add_hook(
             SHELL_ENTRY,
             Box::new(move |cpu, bus| {
@@ -174,6 +190,25 @@ impl Psx {
                 }
             }),
         );
+    }
+
+    /// Whether fast boot is still waiting for the BIOS to reach the shell.
+    pub fn fast_boot_pending(&self) -> bool {
+        self.fast_boot.is_some() && self.bus.has_hook(SHELL_ENTRY)
+    }
+
+    /// Sets fast boot up for a state that was just loaded: armed again for a
+    /// state saved during the boot, disarmed for one saved in the game, where
+    /// 0x80030000 holds the game's own code (running it would restart it).
+    pub fn set_fast_boot_pending(&mut self, pending: bool) {
+        if self.fast_boot.is_none() || pending == self.fast_boot_pending() {
+            return;
+        }
+        if pending {
+            self.arm_fast_boot();
+        } else {
+            self.bus.remove_hook(SHELL_ENTRY);
+        }
     }
 }
 

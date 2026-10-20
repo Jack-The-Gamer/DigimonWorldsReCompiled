@@ -30,7 +30,7 @@ These follow the nocash PSX specification and Mednafen's hardware-tested behavio
 | MDEC IDCT rounding | nocash formulation with 16-bit-per-pass rounding | Occasional ±1 differences in FMV pixel values. |
 | GPU drawing time | Drawing completes instantly (no GPU busy time) | Games are never GPU-bound here, so scenes that slowed down on hardware because of fill rate may run slightly smoother. |
 | CD-ROM seek time | Distance-based model (Mednafen formula) | Loading pauses are close to hardware but not identical. |
-| Interrupt latency (recompiled engine) | Interrupts are taken between translated blocks (at most one block — up to 96 instructions — later than hardware) | No observable effect in testing (frames identical to the interpreter). |
+| Interrupt latency (recompiled engine) | Interrupts are taken between translated blocks (at most one block — up to 96 instructions — later than hardware), also while a block runs on the interpreter waiting for its translation | No observable effect in testing (frames identical to the interpreter). |
 | Built-in BIOS (when you have not added your own) | OpenBIOS: an independent implementation of the BIOS kernel and boot loader | Game code is unaffected, but BIOS routines (boot, kernel calls, memory card and CD-ROM library functions) take different amounts of time than Sony's, so timing-sensitive moments can differ slightly. Add a console BIOS for exactness. |
 | Controllers | Digital pad (SCPH-1080) | Correct for DW1/DW2/DW3 (they need no analog input). DualShock vibration is not emulated yet. |
 

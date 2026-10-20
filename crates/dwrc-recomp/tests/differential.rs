@@ -1,8 +1,12 @@
 //! Differential fuzzing: random R3000A programs are executed by the
 //! reference interpreter and by recompiled native code; the final CPU and
-//! memory state must match exactly. Runs without any game data.
+//! memory state must match exactly. Blocks waiting for their translation
+//! run on the interpreter with the translation's timing, so the recompiler
+//! must end in the same state, to the cycle, whether its blocks ran
+//! natively, on the interpreter or a mix of both. Runs without any game data.
 
 use dwrc_psx::{Psx, VideoStandard};
+use dwrc_recomp::{Mode, Translation};
 
 /// Small deterministic PRNG (xorshift) so failures are reproducible.
 struct Rng(u64);
@@ -151,14 +155,34 @@ fn gen_program(rng: &mut Rng, len: usize) -> Vec<u32> {
     p
 }
 
-fn run(program: &[u32], recompiled: bool) -> Psx {
+/// Runs `program` on the interpreter (`None`) or the recompiler.
+fn run(program: &[u32], recompiler: Option<Translation>) -> Psx {
+    match recompiler {
+        Some(t) => run_with(program, 1, || dwrc_recomp::new_engine_with(Mode::Native, t)),
+        None => run_with(program, 1, || Box::new(dwrc_psx::Interpreter)),
+    }
+}
+
+/// Runs `program` `times` times over (a loop around it, so its blocks run
+/// often), pausing between slices when it is more than once so that
+/// background translations arrive while it runs.
+fn run_with(program: &[u32], times: u32, engine: impl FnOnce() -> Box<dyn dwrc_psx::ExecEngine>) -> Psx {
     let bios = vec![0u8; 512 * 1024];
     let mut psx = Psx::new(&bios, VideoStandard::Ntsc);
-    if recompiled {
-        psx.set_engine(dwrc_recomp::new_engine(dwrc_recomp::Mode::Native));
-    }
+    psx.set_engine(engine());
     for (k, w) in program.iter().enumerate() {
         psx.bus.poke32(CODE + 4 * k as u32, *w);
+    }
+    if times > 1 {
+        // $s4 counts the runs: set before CODE, then the program's final
+        // jump becomes `addiu $s4, -1 ; bne $s4, $0, CODE ; nop ; j done ; nop`.
+        psx.bus.poke32(CODE - 4, i(0x09, 0, 20, times));
+        let tail = CODE + 4 * (program.len() as u32 - 2);
+        psx.bus.poke32(tail, i(0x09, 20, 20, 0xFFFF));
+        psx.bus.poke32(tail + 4, i(0x05, 20, 0, (CODE.wrapping_sub(tail + 8) >> 2) & 0xFFFF));
+        psx.bus.poke32(tail + 8, 0);
+        psx.bus.poke32(tail + 12, (0x02 << 26) | ((DONE >> 2) & 0x03FF_FFFF));
+        psx.bus.poke32(tail + 16, 0);
     }
     // done: b done ; nop
     psx.bus.poke32(DONE, 0x1000_FFFF);
@@ -170,12 +194,18 @@ fn run(program: &[u32], recompiled: bool) -> Psx {
     }
     psx.cpu.cop0.sr = 0; // interrupts off, no BEV
     psx.bus.cache_ctrl = 0x804;
-    psx.cpu.set_pc(CODE);
+    psx.cpu.set_pc(if times > 1 { CODE - 4 } else { CODE });
     let mut guard = 0;
     while psx.cpu.pc & !0xF != DONE & !0xF {
         psx.run_cycles(2000);
+        if times > 1 {
+            let t = std::time::Instant::now();
+            while t.elapsed() < std::time::Duration::from_micros(600) {
+                std::hint::spin_loop();
+            }
+        }
         guard += 1;
-        assert!(guard < 10_000, "program did not terminate (pc {:08x})", psx.cpu.pc);
+        assert!(guard < 100_000, "program did not terminate (pc {:08x})", psx.cpu.pc);
     }
     psx
 }
@@ -183,10 +213,9 @@ fn run(program: &[u32], recompiled: bool) -> Psx {
 #[test]
 fn random_programs_match_interpreter() {
     for seed in 1..=40u64 {
-        let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
-        let prog = gen_program(&mut rng, 300 + (seed as usize % 7) * 50);
-        let a = run(&prog, false);
-        let b = run(&prog, true);
+        let prog = program(seed);
+        let a = run(&prog, None);
+        let b = run(&prog, Some(Translation::Inline));
         for k in 0..32 {
             assert_eq!(a.cpu.regs[k], b.cpu.regs[k], "seed {seed}: r{k} differs");
         }
@@ -194,5 +223,72 @@ fn random_programs_match_interpreter() {
         for k in 0..1024u32 {
             assert_eq!(a.bus.peek32(DATA + 4 * k), b.bus.peek32(DATA + 4 * k), "seed {seed}: data word {k} differs");
         }
+    }
+}
+
+fn program(seed: u64) -> Vec<u32> {
+    let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+    gen_program(&mut rng, 300 + (seed as usize % 7) * 50)
+}
+
+/// Everything two recompiler runs must agree on, cycles included.
+fn same_console(a: &mut Psx, b: &mut Psx, what: &str) {
+    assert_eq!(a.cpu.regs, b.cpu.regs, "{what}: registers differ");
+    assert_eq!((a.cpu.hi, a.cpu.lo, a.cpu.pc), (b.cpu.hi, b.cpu.lo, b.cpu.pc), "{what}: hi/lo/pc differ");
+    assert_eq!((a.cpu.load_reg, a.cpu.load_val), (b.cpu.load_reg, b.cpu.load_val), "{what}: pending load differs");
+    assert_eq!(a.cpu.current_pc, b.cpu.current_pc, "{what}: current pc differs");
+    assert_eq!(a.cpu.instructions, b.cpu.instructions, "{what}: instruction counts differ");
+    assert_eq!(a.bus.cycles, b.bus.cycles, "{what}: cycles differ");
+    assert!(a.bus.ram[..] == b.bus.ram[..], "{what}: RAM differs");
+    // And everything else a save state holds.
+    assert!(a.save_state() == b.save_state(), "{what}: console states differ");
+}
+
+/// A number from the engine report, after `label`.
+fn reported(psx: &Psx, label: &str) -> u64 {
+    let r = psx.engine_report();
+    let at = r.find(label).unwrap_or_else(|| panic!("no {label:?} in {r:?}")) + label.len();
+    r[at..].trim_start().split(|c: char| !c.is_ascii_digit()).next().unwrap().parse().unwrap()
+}
+
+#[test]
+fn interpreted_blocks_match_translations() {
+    for seed in 1..=40u64 {
+        let prog = program(seed);
+        let mut native = run(&prog, Some(Translation::Inline));
+        let mut interpreted = run(&prog, Some(Translation::Off));
+        same_console(&mut native, &mut interpreted, &format!("seed {seed}, interpreted blocks"));
+    }
+}
+
+/// Translations arriving while the program runs: blocks switch from the
+/// interpreter to native code at whatever moment the worker finishes them.
+#[test]
+fn background_translation_matches_inline() {
+    for seed in 1..=12u64 {
+        let prog = program(seed);
+        let mut inline = run_with(&prog, 100, || dwrc_recomp::new_engine_with(Mode::Native, Translation::Inline));
+        let mut background = run_with(&prog, 100, || dwrc_recomp::new_engine_with(Mode::Native, Translation::Background));
+        let (native, interpreted) = (reported(&background, "run"), reported(&background, "on the interpreter"));
+        assert!(native > 0 && interpreted > 0, "seed {seed}: not a mix ({native} block runs, {interpreted} on the interpreter)");
+        same_console(&mut inline, &mut background, &format!("seed {seed}, background translation"));
+    }
+}
+
+/// The code arena filling up while translations are on their way: the
+/// engine drops every translation, the worker starts over, and nothing
+/// translated before is ever installed or run again.
+#[test]
+fn starting_over_keeps_the_console_exact() {
+    for seed in 1..=12u64 {
+        let prog = program(seed);
+        let mut inline = run_with(&prog, 100, || dwrc_recomp::new_engine_with(Mode::Native, Translation::Inline));
+        let mut small = run_with(&prog, 100, || {
+            let mut e = dwrc_recomp::RecompEngine::new(false, Translation::Background);
+            e.code_limit = 4 << 10;
+            Box::new(e)
+        });
+        assert!(reported(&small, "started over") > 0, "seed {seed}: the arena never filled: {}", small.engine_report());
+        same_console(&mut inline, &mut small, &format!("seed {seed}, small code arena"));
     }
 }

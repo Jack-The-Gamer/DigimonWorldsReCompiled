@@ -386,6 +386,10 @@ impl Bus {
         self.hooks_version += 1;
     }
 
+    pub fn has_hook(&self, vaddr: u32) -> bool {
+        self.hooks.contains_key(&(mask_region(vaddr) & 0x1F_FFFF))
+    }
+
     #[inline(always)]
     pub fn hook_at(&self, pc: u32) -> bool {
         let phys = mask_region(pc);
