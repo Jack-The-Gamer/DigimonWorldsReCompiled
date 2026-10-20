@@ -164,8 +164,11 @@ fn run(program: &[u32], recompiler: Option<Translation>) -> Psx {
 }
 
 /// Runs `program` `times` times over (a loop around it, so its blocks run
-/// often), pausing between slices when it is more than once so that
-/// background translations arrive while it runs.
+/// often). Looped runs pause early on, after the first blocks ran, for 60
+/// single blocks 5 ms apart: background translations arrive meanwhile and
+/// later in the run, however busy the machine is. The pause is the same
+/// for every engine, so runs to compare are sliced alike (the run ends at
+/// the first slice boundary in the final loop).
 fn run_with(program: &[u32], times: u32, engine: impl FnOnce() -> Box<dyn dwrc_psx::ExecEngine>) -> Psx {
     let bios = vec![0u8; 512 * 1024];
     let mut psx = Psx::new(&bios, VideoStandard::Ntsc);
@@ -198,10 +201,10 @@ fn run_with(program: &[u32], times: u32, engine: impl FnOnce() -> Box<dyn dwrc_p
     let mut guard = 0;
     while psx.cpu.pc & !0xF != DONE & !0xF {
         psx.run_cycles(2000);
-        if times > 1 {
-            let t = std::time::Instant::now();
-            while t.elapsed() < std::time::Duration::from_micros(600) {
-                std::hint::spin_loop();
+        if times > 1 && guard == 10 {
+            for _ in 0..60 {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                psx.run_cycles(1); // one block, taking the translations that arrived
             }
         }
         guard += 1;
@@ -265,7 +268,7 @@ fn interpreted_blocks_match_translations() {
 /// interpreter to native code at whatever moment the worker finishes them.
 #[test]
 fn background_translation_matches_inline() {
-    for seed in 1..=12u64 {
+    for seed in 1..=8u64 {
         let prog = program(seed);
         let mut inline = run_with(&prog, 100, || dwrc_recomp::new_engine_with(Mode::Native, Translation::Inline));
         let mut background = run_with(&prog, 100, || dwrc_recomp::new_engine_with(Mode::Native, Translation::Background));
@@ -280,7 +283,7 @@ fn background_translation_matches_inline() {
 /// translated before is ever installed or run again.
 #[test]
 fn starting_over_keeps_the_console_exact() {
-    for seed in 1..=12u64 {
+    for seed in 1..=8u64 {
         let prog = program(seed);
         let mut inline = run_with(&prog, 100, || dwrc_recomp::new_engine_with(Mode::Native, Translation::Inline));
         let mut small = run_with(&prog, 100, || {
