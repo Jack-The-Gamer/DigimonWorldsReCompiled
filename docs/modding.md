@@ -111,21 +111,58 @@ Dependencies are loaded before the mods that need them.
 
 ## Publishing a mod
 
-There are two ways; the launcher treats them the same.
+Players get mods from **mod indexes**: GitHub repositories that publish a
+list of mods, which the launcher reads in **Find mods**. The
+[Re:Compiled index](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index)
+is built in and lists the mods made for the project; it does not take
+submissions. To share your mods, publish them through **an index of your
+own**, which players add in **Find mods → Indexes…** with its `owner/repo`.
+Your mods are then listed next to the built-in ones, with one-click installs,
+update checks and version history.
 
-**Hosted in the mod index (no repository of your own).** Open a pull request
-to the [mod index](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index)
-adding `mods/<You>@<id>/` with the mod itself in a `mod/` folder (`mod.toml`
-at its top, set `github = "Jack-The-Gamer/DigimonWorldsReCompiled-mod-index"`),
-plus `description.md` and optionally `thumbnail.png`. The listing's details
-come from `mod.toml`, so there is no `meta.json` to keep in step. To release a
-version, bump `version` in `mod.toml` and get it onto the index's `main`
-branch: the index checks the mod, publishes the release
-`<id>-v<version>` with `<id>-<version>.zip` (its notes are the message of the
-commit that changed the mod) and lists it. [Turbo](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index/tree/HEAD/mods/Jack-The-Gamer@turbo)
-is published this way. Details: the index's README, "Hosting a mod here".
+### How an index works
 
-**In your own repository.**
+An index is a repository laid out like the Re:Compiled index, with one folder
+per mod under `mods/`. On every push to `main`, and nightly, its **Build and
+publish** workflow checks the mods with `dwrc-cli mod validate`, releases any
+new versions, builds the feed (`data/index.json`) with the index's build tool,
+and publishes it to the repository's `gh-pages` branch. The launcher reads the
+feed from GitHub Pages (`https://<owner>.github.io/<repo>/data/index.json`).
+Installing a listed mod downloads its release `.zip` and installs it exactly
+as **Import .zip…** does, and updates come from the GitHub Releases of the
+repository named by `github` in the mod's `mod.toml`.
+
+### Setting up your own index
+
+1. Create a public GitHub repository (say `you/my-dwrc-mods`) and push a copy
+   of the [Re:Compiled index](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index)
+   to its `main` branch, without the folders inside `mods/` (those are the
+   Re:Compiled mods).
+2. Add your mods to `mods/`, one folder each (below), and push. The workflow
+   runs under **Actions** and creates the `gh-pages` branch.
+3. Turn on GitHub Pages: **Settings → Pages**, *Deploy from a branch*,
+   `gh-pages`, `/ (root)`.
+4. Tell players to add `you/my-dwrc-mods` in **Find mods → Indexes…**.
+
+The index's README, "Your own mod index", has the details.
+
+### Adding a mod to your index
+
+A mod can live in the index itself or in a repository of its own; the
+launcher treats both the same.
+
+**Hosted in the index.** Put the mod in `mods/<You>@<id>/mod/` (`mod.toml`
+at its top, with `github = "you/my-dwrc-mods"`, the index's repository), plus
+`description.md` and optionally `thumbnail.png`. The listing's details come
+from `mod.toml`, so there is no `meta.json` to keep in step. To release a
+version, bump `version` in `mod.toml` and push: the index checks the mod,
+publishes the release `<id>-v<version>` with `<id>-<version>.zip` (its notes
+are the message of the commit that changed the mod) and lists it. The
+Re:Compiled index publishes its own mods, such as
+[Turbo](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index/tree/HEAD/mods/Jack-The-Gamer@turbo),
+this way.
+
+**In the mod's own repository.**
 
 1. Put the mod in a GitHub repository with `mod.toml` at its root and set
    `github = "you/your-mod"`.
@@ -135,9 +172,10 @@ is published this way. Details: the index's README, "Hosting a mod here".
    [`templates/release-mod.yml`](templates/release-mod.yml) is a GitHub
    Actions workflow that does all of it for you: bump `version` in
    `mod.toml`, push (GitHub Desktop is fine), and the release appears.
-3. List it in the mod index with a pull request adding
-   `mods/<You>@<id>/meta.json` and `description.md`. The index follows your
-   releases nightly, so new versions need no further pull requests.
+3. List it in your index with a folder `mods/<You>@<id>/` holding
+   `meta.json` (copy the index's `examples/` entry) and `description.md`.
+   The index follows the mod's releases nightly, so new versions need no
+   change to the index.
 
 Players who installed your mod are offered each new release in the launcher.
 Release tags may also be `<id>-v1.2.0` when one repository holds several mods.
@@ -145,9 +183,9 @@ Assets are chosen as `<id>-<version>.zip`, then a `.zip` starting with the id,
 then the first `.zip`; the newest stable release is preferred over a newer
 pre-release. `dwrc-cli mod validate <folder>` checks a mod before you publish.
 
-Anyone can run their own index: a repository laid out like the Re:Compiled
-index, published to GitHub Pages, can be added in **Indexes…** by its
-`owner/repo`.
+A mod doesn't have to be in an index at all: a `.zip` from
+`dwrc-cli mod pack` installs with **Import .zip…**, and if its `mod.toml` names
+its GitHub repository, update checks work the same.
 
 ## Replacing files
 

@@ -33,7 +33,7 @@ Your discs are never copied or modified. Saves (memory cards), settings, screens
 
 **Video:** **Settings → Video** offers sharp original pixels, smoothed scaling, or a **CRT** filter that draws the picture like a CRT television (scanlines, phosphor mask and screen curvature, each adjustable), plus 4:3, integer-scaled or stretched output. **Digimon World 2003 (Europe)** plays at **60 Hz** by default: the European release has a 60 Hz mode of its own, and Re:Compiled switches it on, so it plays at the speed of the USA release with the same music tempo. Untick **Digimon World 2003 at 60 Hz** there for the original 50 Hz, which plays about 17% slower.
 
-**Updates:** when a new version is released, an **Update** button appears at the bottom of the Games page. It shows what's new, downloads the new version and replaces the program where it is; your games, saves, settings and mods are kept, and a restart finishes it. **Settings → About** can turn the check off. (A copy built from source updates by pulling and rebuilding instead. Versions before 0.2.2 can't update themselves: download the latest release once by hand.)
+**Updates:** when a new version is released, an **Update** button appears at the bottom of the Games page. It shows what's new, downloads the new version and replaces the program where it is; your games, saves, settings and mods are kept, and a restart finishes it. **Settings → About** can turn the check off. (A copy built from source updates by pulling and rebuilding instead.)
 
 **Community:** [Discord](https://discord.gg/zyUF5mUt84) · [Ko-fi](https://ko-fi.com/jackthegamer7) (also on the Games page).
 
@@ -78,7 +78,7 @@ Without a BIOS dump, games start with the built-in **OpenBIOS** (open source, MI
 
 ## Mods
 
-The mod index lives in its own repository, [Jack-The-Gamer/DigimonWorldsReCompiled-mod-index](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index).
+The built-in mod index, with the mods made for the project, lives in its own repository: [Jack-The-Gamer/DigimonWorldsReCompiled-mod-index](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index).
 
 
 The launcher has a **Mods** page next to **Games** and **Settings**:
@@ -89,7 +89,7 @@ The launcher has a **Mods** page next to **Games** and **Settings**:
 
 Mods can replace files on the (virtual) disc, patch memory, and run Lua scripts with hooks on any code address, every frame and on controller input, with their own options and save data. Scripts run in a sandbox with no file, network or OS access. Authors publish versions as GitHub Releases; the launcher checks for mod updates when it starts and puts an **Update** button on each mod that has one. **F10** in game switches the running game's mods on and off.
 
-Re:Compiled ships only a documented **template**; mods themselves come from the index, for example [**Turbo**](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index/tree/HEAD/mods/Jack-The-Gamer@turbo) (hold R2, then any one or two buttons to turbo them) and [**Fast-Forward**](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index/tree/HEAD/mods/Jack-The-Gamer@fast-forward) (L2 + R2 for double or triple speed, with the music left at normal speed). Authors can publish a mod from their own GitHub repository or host it in the index itself. See **[docs/modding.md](docs/modding.md)** for using, writing and publishing mods.
+Re:Compiled ships only a documented **template**; mods themselves come from mod indexes. The built-in one has, for example [**Turbo**](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index/tree/HEAD/mods/Jack-The-Gamer@turbo) (hold R2, then any one or two buttons to turbo them) and [**Fast-Forward**](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index/tree/HEAD/mods/Jack-The-Gamer@fast-forward) (L2 + R2 for double or triple speed, with the music left at normal speed). Mod authors publish their mods through a mod index of their own, which players add with **Indexes…**. See **[docs/modding.md](docs/modding.md)** for using, writing and publishing mods.
 
 ## How it works
 
