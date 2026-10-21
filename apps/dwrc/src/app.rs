@@ -1240,7 +1240,7 @@ impl eframe::App for App {
         let mut env = crate::mods_page::Env { cfg: &mut self.cfg, paths: &self.paths, lib: &self.lib, running: self.emu.as_ref().map(|e| e.game) };
         // Mod indexes and mod updates: asked for when the launcher starts.
         self.mods_ui.tick(ctx, &env);
-        if self.mods_ui.poll(ctx, &mut env) {
+        if self.mods_ui.poll(&mut env) {
             self.save_cfg();
         }
         for (msg, err) in std::mem::take(&mut self.mods_ui.toasts) {

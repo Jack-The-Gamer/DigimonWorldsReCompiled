@@ -18,7 +18,7 @@ use dwrc_modhub::{text, Hub, IndexEntry, IndexFetch, IndexSource, Progress, Rele
 use dwrc_mods::package::{self, AlreadyInstalled, InstallOptions, Installed};
 use dwrc_mods::{ModInfo, ModSource, OptionKind, Skip};
 use dwrc_runtime::{Config, Library, Paths};
-use eframe::egui::{self, Color32, RichText, Stroke, TextureHandle, TextureOptions, Vec2};
+use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -72,7 +72,6 @@ enum Msg {
     /// The releases of several mods published from one repository.
     ReleaseBatch(Vec<(String, ReleasesFetch)>),
     Text(String, Result<String, String>),
-    Image(String, Result<(u32, u32, Vec<u8>), String>),
     Installed(Vec<Result<Installed, String>>),
     AskReplace(PathBuf, AlreadyInstalled),
 }
@@ -146,7 +145,6 @@ pub struct ModsUi {
     find_sort: SortKey,
     details: Option<(String, String)>,
     texts: HashMap<String, Remote<Result<String, String>>>,
-    images: HashMap<String, Remote<Option<TextureHandle>>>,
     op: Option<Op>,
     confirm: Option<Confirm>,
     versions_for: Option<String>,
@@ -186,7 +184,6 @@ impl ModsUi {
             find_sort: SortKey::Name,
             details: None,
             texts: HashMap::new(),
-            images: HashMap::new(),
             op: None,
             confirm: None,
             versions_for: None,
@@ -297,15 +294,6 @@ impl ModsUi {
         self.texts.insert(url.to_string(), Remote::Loading);
         let u = url.to_string();
         self.spawn(ctx, move |hub| Msg::Text(u.clone(), hub.fetch_text(&u).map_err(|e| format!("{e:#}"))));
-    }
-
-    fn want_image(&mut self, ctx: &egui::Context, url: &str) {
-        if self.images.contains_key(url) {
-            return;
-        }
-        self.images.insert(url.to_string(), Remote::Loading);
-        let u = url.to_string();
-        self.spawn(ctx, move |hub| Msg::Image(u.clone(), hub.fetch_image(&u).map_err(|e| format!("{e:#}")).and_then(|b| decode_png(&b))));
     }
 
     /// Every listing for a mod id across the loaded indexes.
@@ -430,7 +418,7 @@ impl ModsUi {
     // ------------------------------------------------------------------
 
     /// Applies finished background work. Returns true if settings changed.
-    pub fn poll(&mut self, ctx: &egui::Context, env: &mut Env) -> bool {
+    pub fn poll(&mut self, env: &mut Env) -> bool {
         let mut cfg_changed = false;
         while let Ok(m) = self.rx.try_recv() {
             match m {
@@ -447,12 +435,6 @@ impl ModsUi {
                 }
                 Msg::Text(url, r) => {
                     self.texts.insert(url, Remote::Ready(r));
-                }
-                Msg::Image(url, r) => {
-                    let tex = r.ok().map(|(w, h, rgba)| {
-                        ctx.load_texture(url.clone(), egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba), TextureOptions::LINEAR)
-                    });
-                    self.images.insert(url, Remote::Ready(tex));
                 }
                 Msg::AskReplace(zip, info) => {
                     self.confirm = Some(Confirm::Replace { zip, info });
@@ -965,7 +947,6 @@ impl ModsUi {
     // ------------------------------------------------------------------
 
     fn find_tab(&mut self, ui: &mut egui::Ui, env: &mut Env, acts: &mut Vec<Act>) {
-        let ctx = ui.ctx().clone();
         ui.horizontal_wrapped(|ui| {
             ui.label("Browse");
             let cur = self.find_source.as_ref().and_then(|f| self.sources.iter().find(|s| &s.feed == f)).map(|s| s.label.clone());
@@ -1068,7 +1049,6 @@ impl ModsUi {
             entries.sort_by_key(|(_, e, _)| pos(e));
         }
         let installed: HashMap<&str, &ModInfo> = self.mods.iter().map(|m| (m.id(), m)).collect();
-        let mut want_images: Vec<String> = Vec::new();
         ui.add_space(4.0);
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.set_max_width(980.0);
@@ -1082,22 +1062,10 @@ impl ModsUi {
             } else if entries.is_empty() && total > 0 {
                 ui.label(RichText::new("No mods match that search.").color(MUTED));
             }
-            for (src, e, base) in &entries {
-                let thumb = e.thumbnail.as_deref().and_then(|t| index::join_url(base, t));
-                let tex = thumb.as_ref().and_then(|u| match self.images.get(u) {
-                    Some(Remote::Ready(t)) => t.clone(),
-                    Some(Remote::Loading) => None,
-                    None => {
-                        want_images.push(u.clone());
-                        None
-                    }
-                });
-                listing_card(ui, src, e, tex.as_ref(), installed.get(e.id.as_str()).copied(), self.op.is_none(), acts);
+            for (src, e, _) in &entries {
+                listing_card(ui, src, e, installed.get(e.id.as_str()).copied(), self.op.is_none(), acts);
             }
         });
-        for u in want_images {
-            self.want_image(&ctx, &u);
-        }
         let _ = env;
     }
 
@@ -1625,67 +1593,50 @@ fn install_button(ui: &mut egui::Ui, e: &IndexEntry, installed: Option<&ModInfo>
     }
 }
 
-fn listing_card(ui: &mut egui::Ui, src: &IndexSource, e: &IndexEntry, tex: Option<&TextureHandle>, installed: Option<&ModInfo>, idle: bool, acts: &mut Vec<Act>) {
+fn listing_card(ui: &mut egui::Ui, src: &IndexSource, e: &IndexEntry, installed: Option<&ModInfo>, idle: bool, acts: &mut Vec<Act>) {
     egui::Frame::default().fill(CARD_BG).corner_radius(8.0).inner_margin(10.0).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.horizontal(|ui| {
-            let size = Vec2::new(112.0, 84.0);
-            match tex {
-                Some(t) => {
-                    let ts = t.size_vec2();
-                    let k = (size.x / ts.x).min(size.y / ts.y);
-                    ui.add(egui::Image::new(egui::load::SizedTexture::new(t.id(), ts * k)));
-                }
-                None => {
-                    let (r, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-                    ui.painter().rect_filled(r, 6.0, Color32::from_rgb(22, 26, 34));
-                    ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, e.title.chars().next().unwrap_or('?').to_string(), egui::FontId::proportional(34.0), Color32::from_rgb(55, 62, 78));
-                }
+        ui.horizontal_wrapped(|ui| {
+            if ui.add(egui::Label::new(RichText::new(&e.title).size(16.0).strong().color(Color32::WHITE)).sense(egui::Sense::click())).on_hover_text("Details").clicked() {
+                acts.push(Act::Details(src.feed.clone(), e.id.clone()));
             }
-            ui.vertical(|ui| {
-                ui.horizontal_wrapped(|ui| {
-                    if ui.add(egui::Label::new(RichText::new(&e.title).size(16.0).strong().color(Color32::WHITE)).sense(egui::Sense::click())).on_hover_text("Details").clicked() {
-                        acts.push(Act::Details(src.feed.clone(), e.id.clone()));
-                    }
-                    let v = e.display_version();
-                    if v != "?" {
-                        ui.label(RichText::new(format!("v{v}")).color(MUTED));
-                    }
-                    if let Some(a) = &e.author {
-                        ui.label(RichText::new(format!("by {a}")).color(MUTED));
-                    }
-                    if e.experimental {
-                        tag(ui, "EXPERIMENTAL", WARN);
-                    }
-                });
-                if !e.summary.is_empty() {
-                    ui.label(text::preview_line(&e.summary, 180));
-                }
-                ui.horizontal_wrapped(|ui| {
-                    for g in e.game_ids() {
-                        tag(ui, game_short(g), game_color(g));
-                    }
-                    for c in e.categories.iter().take(3) {
-                        tag(ui, &c.to_uppercase(), MUTED);
-                    }
-                    let mut stats = Vec::new();
-                    if let Some(d) = e.total_downloads() {
-                        stats.push(format!("{} downloads", text::short_count(d)));
-                    }
-                    if let Some(u) = e.updated() {
-                        stats.push(format!("updated {u}"));
-                    }
-                    if !stats.is_empty() {
-                        ui.label(RichText::new(stats.join(" · ")).color(MUTED).small());
-                    }
-                });
-                ui.horizontal(|ui| {
-                    install_button(ui, e, installed, idle, &src.feed, acts);
-                    if ui.button("Details").clicked() {
-                        acts.push(Act::Details(src.feed.clone(), e.id.clone()));
-                    }
-                });
-            });
+            let v = e.display_version();
+            if v != "?" {
+                ui.label(RichText::new(format!("v{v}")).color(MUTED));
+            }
+            if let Some(a) = &e.author {
+                ui.label(RichText::new(format!("by {a}")).color(MUTED));
+            }
+            if e.experimental {
+                tag(ui, "EXPERIMENTAL", WARN);
+            }
+        });
+        if !e.summary.is_empty() {
+            ui.label(text::preview_line(&e.summary, 180));
+        }
+        ui.horizontal_wrapped(|ui| {
+            for g in e.game_ids() {
+                tag(ui, game_short(g), game_color(g));
+            }
+            for c in e.categories.iter().take(3) {
+                tag(ui, &c.to_uppercase(), MUTED);
+            }
+            let mut stats = Vec::new();
+            if let Some(d) = e.total_downloads() {
+                stats.push(format!("{} downloads", text::short_count(d)));
+            }
+            if let Some(u) = e.updated() {
+                stats.push(format!("updated {u}"));
+            }
+            if !stats.is_empty() {
+                ui.label(RichText::new(stats.join(" · ")).color(MUTED).small());
+            }
+        });
+        ui.horizontal(|ui| {
+            install_button(ui, e, installed, idle, &src.feed, acts);
+            if ui.button("Details").clicked() {
+                acts.push(Act::Details(src.feed.clone(), e.id.clone()));
+            }
         });
     });
     ui.add_space(6.0);
@@ -1727,26 +1678,4 @@ fn release_row(ui: &mut egui::Ui, m: &ModInfo, r: &Release, idle: bool, acts: &m
         }
     });
     ui.add_space(4.0);
-}
-
-/// PNG bytes to RGBA (thumbnails are PNG, at most 1024×1024).
-fn decode_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
-    let mut dec = png::Decoder::new(std::io::Cursor::new(bytes));
-    dec.set_transformations(png::Transformations::normalize_to_color8());
-    let mut r = dec.read_info().map_err(|e| e.to_string())?;
-    let (w, h) = (r.info().width, r.info().height);
-    if w > 1024 || h > 1024 {
-        return Err("thumbnail too large".into());
-    }
-    let mut buf = vec![0; r.output_buffer_size()];
-    let info = r.next_frame(&mut buf).map_err(|e| e.to_string())?;
-    let px = (info.width * info.height) as usize;
-    let rgba = match (info.color_type, info.bit_depth) {
-        (png::ColorType::Rgba, png::BitDepth::Eight) => buf[..px * 4].to_vec(),
-        (png::ColorType::Rgb, png::BitDepth::Eight) => buf[..px * 3].chunks(3).flat_map(|c| [c[0], c[1], c[2], 255]).collect(),
-        (png::ColorType::GrayscaleAlpha, png::BitDepth::Eight) => buf[..px * 2].chunks(2).flat_map(|c| [c[0], c[0], c[0], c[1]]).collect(),
-        (png::ColorType::Grayscale, png::BitDepth::Eight) => buf[..px].iter().flat_map(|&g| [g, g, g, 255]).collect(),
-        _ => return Err("unsupported PNG format (use 8-bit RGB or RGBA)".into()),
-    };
-    Ok((info.width, info.height, rgba))
 }
