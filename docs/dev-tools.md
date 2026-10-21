@@ -63,6 +63,89 @@ frame number, and `--mod` folders run as usual.
 
 Feed it from a named pipe to drive it from a script, e.g.
 `mkfifo in; dwrc-cli run game.cue --fast --engine recomp --card1 my.mcd --serve < in > out.log &`.
+Any long-lived pipe works: a small script that keeps one `--serve` process
+running and passes it commands from a socket lets you send a few commands,
+look at the screenshots, decide, and send more, without starting over.
+
+## Researching a game
+
+How the DW3 Auction Notifications mod's facts were found, as a recipe for
+finding your own. The aim is always the same: a value in RAM (a flag, a
+counter), the code that reads or writes it, and a pattern for that code that
+holds no addresses, so the mod also works on the other releases.
+
+**Get there once, then use save states.** Play to the place with `--serve`
+(`press`, `wait`, `shot`), and `savestate N` before and after everything
+interesting: before a boss, after it, at a door. Later experiments start with
+`loadstate N`, a second away from the moment you care about. Save states from
+the launcher's Save States mod (`states/<serial>/slotN.state` in its data
+folder) load in `dwrc-cli` too (`--states` pointing at a copy of that folder),
+so a player can play to a place and hand you the states. Copy memory cards
+before `--card1`: the card is written back when the run ends.
+
+**Diff RAM across a story beat.** `ram FILE` before and after the event (beat
+a boss, watch a scene, finish an auction), then compare. Most of the noise
+goes away if you look only at the part of RAM the game saves: find where the
+save's bytes sit in RAM by searching a RAM dump for 32-byte pieces of the
+save on the memory card (frame 1's directory gives each file's first block,
+8 KiB each). In Digimon World 2003 the save image is 0x80048D34 to
+0x8004B434; between two states only a dozen of its bytes change, and the
+play time, BIT and the encounter countdown are easy to recognise.
+
+**Poke to test a candidate.** Load a state from just before the event, put
+one candidate byte back to its old value (`poke8`), play the event again, and
+see whether it still happens. Five candidates for "an auction is on" took
+five short runs; only the story stage word stopped it.
+
+**Find the code that writes a value.** `watch ADDR` with `--engine interp`
+prints each change and the instruction that made it. Watching is slow, so
+save a state a second or two before the change: replay the inputs to find
+the second in which it happens (a loop of `wait`, `press`, `peek`), save a
+state there, then watch only that second. The writer is often a small shared
+function (Digimon World 2003's "set bit n of this byte array", its "add one
+of item n"), and its callers tell you which array is which.
+
+**Read the code.** `disasm` takes a PS-X EXE, so put a 2 KiB header in front
+of a `ram` dump (`PS-X EXE` at 0, load address 0x80000000 at 0x18, the size
+at 0x1C) and disassemble any address, overlays included. To list the
+callers of a function, search the dump for its `jal` word (`0x0C000000 |
+(addr >> 2)`); for the users of a variable, search for loads and stores with
+its low 16 bits as the offset and a `lui` of the high half a few words
+before.
+
+**Log what the game checks, with a mod.** A mod of a few lines can hook a
+game function with `dwrc.on_exec` and `dwrc.log` its arguments: run with
+`RUST_LOG=info` and the log shows every call. Hooking Digimon World 2003's
+condition test (`test(id, sense)`) and walking into the auction room listed
+the conditions the room checks; that led to the room's table of all sixteen
+auctions. Log each distinct value once, and switch the logging on and off
+with a key (`dwrc.on_key`, `key L` in `--serve`) to keep the log short. Only
+one hook per address is kept: if two mods (or a mod and your probe) hook the
+same address, the later one replaces the earlier.
+
+**Find the code behind a screen.** `pcs N [LO HI]` lists where the CPU runs.
+Compare two screens (the field and an area title, say) to find code that
+runs on one and not the other; a hook on the start of such a function tells
+a mod which screen is up.
+
+**Line pictures up with the game's numbers.** To draw at a place in the
+game's picture, find where the game keeps its scroll (diff `ram` dumps while
+scrolling), then compare screenshots with those values: locate a piece of
+the picture in each shot (match a small crop pixel by pixel) and check that
+the difference stays the same. Step one frame at a time (`press down 1`,
+`shot`) to see the delay: Digimon World 2003's picture shows what it drew
+two frames earlier, so a mod's image follows values from two frames back.
+Check both video modes where a game has two (Digimon World 2003 at 60 and
+50 Hz).
+
+**Check the other releases.** Boot each disc to the title and `--dump-ram`:
+the main executable is in RAM, and your patterns either match there or tell
+you what differs (Digimon World 3 USA keeps some data a few bytes from where
+the European and Japanese releases do, so read addresses out of the
+instructions instead of writing them down). Code and data from overlays can
+be searched for in the disc images themselves: a raw `.bin` has 2352-byte
+sectors with 2048 bytes of data at offset 24, so search with short patterns
+or join the sectors' data first. Read the dumps; never write them.
 
 `DWRC_GITHUB_API=<url>` points update checks at another GitHub API endpoint (for testing against a local server).
 
