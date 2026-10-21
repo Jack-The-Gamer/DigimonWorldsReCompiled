@@ -5,7 +5,7 @@
 //! must end in the same state, to the cycle, whether its blocks ran
 //! natively, on the interpreter or a mix of both. Runs without any game data.
 
-use dwrc_psx::{Psx, VideoStandard};
+use dwrc_psx::{HookAction, Psx, VideoStandard};
 use dwrc_recomp::{Mode, Translation};
 
 /// Small deterministic PRNG (xorshift) so failures are reproducible.
@@ -293,5 +293,78 @@ fn starting_over_keeps_the_console_exact() {
         });
         assert!(reported(&small, "started over") > 0, "seed {seed}: the arena never filled: {}", small.engine_report());
         same_console(&mut inline, &mut small, &format!("seed {seed}, small code arena"));
+    }
+}
+
+/// Several hooks on one address run in the order they were added, every
+/// time, on every engine; a one-shot hook among them runs once (its removal
+/// makes the recompiler flush).
+#[test]
+fn hooks_on_one_address_run_in_order() {
+    const LOOP: u32 = CODE + 4;
+    let program = [
+        i(0x09, 0, 20, 50),                                            // addiu $s4, $0, 50
+        i(0x09, 22, 22, 1),                                            // loop: addiu $s6, $s6, 1
+        i(0x09, 20, 20, 0xFFFF),                                       // addiu $s4, $s4, -1
+        i(0x05, 20, 0, (LOOP.wrapping_sub(CODE + 16) >> 2) & 0xFFFF), // bne $s4, $0, loop
+        0,
+        (0x02 << 26) | ((DONE >> 2) & 0x03FF_FFFF), // j done
+        0,
+    ];
+    let run = |engine: Box<dyn dwrc_psx::ExecEngine>| {
+        let mut psx = Psx::new(&vec![0u8; 512 * 1024], VideoStandard::Ntsc);
+        psx.set_engine(engine);
+        for (k, w) in program.iter().enumerate() {
+            psx.bus.poke32(CODE + 4 * k as u32, *w);
+        }
+        psx.bus.poke32(DONE, 0x1000_FFFF);
+        psx.bus.poke32(DONE + 4, 0);
+        // $s5 holds a value only this order of hooks gives; $s6 counts the loops.
+        psx.bus.add_hook(
+            LOOP,
+            Box::new(|cpu, _| {
+                cpu.regs[21] = cpu.regs[21].wrapping_mul(3).wrapping_add(1);
+                HookAction::Continue
+            }),
+        );
+        psx.bus.add_hook(
+            LOOP,
+            Box::new(|cpu, _| {
+                cpu.regs[21] = cpu.regs[21].rotate_left(5) ^ cpu.regs[22];
+                HookAction::Continue
+            }),
+        );
+        psx.bus.add_hook_once(
+            LOOP,
+            Box::new(|cpu, _| {
+                cpu.regs[21] = cpu.regs[21].wrapping_add(1000);
+                HookAction::Continue
+            }),
+        );
+        psx.cpu.cop0.sr = 0;
+        psx.bus.cache_ctrl = 0x804;
+        psx.cpu.set_pc(CODE);
+        let mut guard = 0;
+        while psx.cpu.pc & !0xF != DONE & !0xF {
+            psx.run_cycles(2000);
+            guard += 1;
+            assert!(guard < 10_000, "program did not terminate (pc {:08x})", psx.cpu.pc);
+        }
+        psx
+    };
+    let mut expected = 0u32;
+    for n in 0..50 {
+        expected = expected.wrapping_mul(3).wrapping_add(1).rotate_left(5) ^ n;
+        if n == 0 {
+            expected = expected.wrapping_add(1000);
+        }
+    }
+    let interpreted = run(Box::new(dwrc_psx::Interpreter));
+    assert_eq!((interpreted.cpu.regs[21], interpreted.cpu.regs[22]), (expected, 50), "interpreter");
+    let mut inline = run(dwrc_recomp::new_engine_with(Mode::Native, Translation::Inline));
+    assert_eq!((inline.cpu.regs[21], inline.cpu.regs[22]), (expected, 50), "recompiler");
+    for t in [Translation::Background, Translation::Off] {
+        let mut other = run(dwrc_recomp::new_engine_with(Mode::Native, t));
+        same_console(&mut inline, &mut other, &format!("hooks, {t:?}"));
     }
 }

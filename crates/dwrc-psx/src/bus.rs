@@ -9,7 +9,7 @@ use crate::mdec::Mdec;
 use crate::sio::Sio;
 use crate::spu::Spu;
 use crate::timers::Timers;
-use crate::{HookAction, PcHook, VideoStandard};
+use crate::{HookAction, HookId, PcHook, VideoStandard};
 use std::collections::HashMap;
 
 pub const RAM_SIZE: usize = 2 * 1024 * 1024;
@@ -110,6 +110,15 @@ struct Invalidation {
     any: bool,
 }
 
+/// A PC hook at one address.
+struct Hook {
+    id: HookId,
+    /// Removed when it runs (`add_hook_once`).
+    once: bool,
+    /// Taken out while it runs.
+    f: Option<PcHook>,
+}
+
 pub struct Bus {
     pub ram: Box<[u8]>,
     pub scratch: Box<[u8]>,
@@ -145,9 +154,11 @@ pub struct Bus {
     invalidation: Invalidation,
 
     hook_bits: Box<[u64]>,
-    hooks: HashMap<u32, PcHook>,
+    /// Every hook at an address, in the order they were added.
+    hooks: HashMap<u32, Vec<Hook>>,
     pub has_hooks: bool,
     hooks_version: u64,
+    next_hook: u64,
     /// Set by hooks/debuggers to make the engine return early.
     pub stop_requested: bool,
 
@@ -193,6 +204,7 @@ impl Bus {
             hooks: HashMap::new(),
             has_hooks: false,
             hooks_version: 0,
+            next_hook: 0,
             stop_requested: false,
             tty: String::new(),
             tty_echo: false,
@@ -368,26 +380,47 @@ impl Bus {
     // Hooks and code tracking
     // ------------------------------------------------------------------
 
-    pub fn add_hook(&mut self, vaddr: u32, hook: PcHook) {
+    /// Adds a hook that runs whenever the CPU reaches `vaddr`, after the
+    /// hooks already there (see `run_hook`).
+    pub fn add_hook(&mut self, vaddr: u32, hook: PcHook) -> HookId {
+        self.insert_hook(vaddr, hook, false)
+    }
+
+    /// Adds a hook that runs the next time the CPU reaches `vaddr`, and is
+    /// removed as it starts.
+    pub fn add_hook_once(&mut self, vaddr: u32, hook: PcHook) -> HookId {
+        self.insert_hook(vaddr, hook, true)
+    }
+
+    fn insert_hook(&mut self, vaddr: u32, hook: PcHook, once: bool) -> HookId {
         let phys = mask_region(vaddr) & 0x1F_FFFF;
         let w = (phys >> 2) as usize;
         self.hook_bits[w / 64] |= 1 << (w % 64);
-        self.hooks.insert(phys, hook);
+        let id = HookId(self.next_hook);
+        self.next_hook += 1;
+        self.hooks.entry(phys).or_default().push(Hook { id, once, f: Some(hook) });
         self.has_hooks = true;
         self.hooks_version += 1;
+        id
     }
 
-    pub fn remove_hook(&mut self, vaddr: u32) {
-        let phys = mask_region(vaddr) & 0x1F_FFFF;
-        let w = (phys >> 2) as usize;
-        self.hook_bits[w / 64] &= !(1 << (w % 64));
-        self.hooks.remove(&phys);
+    /// Removes one hook; the others at its address stay. A hook may remove
+    /// itself (or another) while it runs.
+    pub fn remove_hook(&mut self, id: HookId) {
+        let Some((&phys, list)) = self.hooks.iter_mut().find(|(_, l)| l.iter().any(|h| h.id == id)) else { return };
+        list.retain(|h| h.id != id);
+        if list.is_empty() {
+            self.hooks.remove(&phys);
+            let w = (phys >> 2) as usize;
+            self.hook_bits[w / 64] &= !(1 << (w % 64));
+        }
         self.has_hooks = !self.hooks.is_empty();
         self.hooks_version += 1;
     }
 
-    pub fn has_hook(&self, vaddr: u32) -> bool {
-        self.hooks.contains_key(&(mask_region(vaddr) & 0x1F_FFFF))
+    /// Whether the hook is still installed.
+    pub fn has_hook(&self, id: HookId) -> bool {
+        self.hooks.values().any(|l| l.iter().any(|h| h.id == id))
     }
 
     #[inline(always)]
@@ -400,19 +433,37 @@ impl Bus {
         self.hook_bits[w / 64] & (1 << (w % 64)) != 0
     }
 
+    /// Runs the hooks at `pc` in the order they were added, and returns
+    /// `Redirect` if one of them moved the PC. The hooks after that one
+    /// don't run: the CPU is no longer at their address. Hooks added while
+    /// these run wait for the next time `pc` is reached; hooks removed
+    /// meanwhile don't run.
     pub fn run_hook(&mut self, cpu: &mut Cpu, pc: u32) -> HookAction {
         let phys = mask_region(pc) & 0x1F_FFFF;
-        if let Some(mut h) = self.hooks.remove(&phys) {
-            let r = h(cpu, self);
-            // The hook may have removed itself.
-            let w = (phys >> 2) as usize;
-            if self.hook_bits[w / 64] & (1 << (w % 64)) != 0 {
-                self.hooks.entry(phys).or_insert(h);
+        let end = self.next_hook;
+        let mut next = 0;
+        while let Some((id, once, mut f)) = self.take_hook(phys, next, end) {
+            next = id.0 + 1;
+            if once {
+                self.remove_hook(id);
             }
-            r
-        } else {
-            HookAction::Continue
+            let r = f(cpu, self);
+            // The hook may have removed itself.
+            if let Some(h) = self.hooks.get_mut(&phys).and_then(|l| l.iter_mut().find(|h| h.id == id)) {
+                h.f = Some(f);
+            }
+            if r == HookAction::Redirect {
+                return r;
+            }
         }
+        HookAction::Continue
+    }
+
+    /// Takes out the first hook at `phys` numbered from `from` up to (not
+    /// including) `end`. Lists are in id order.
+    fn take_hook(&mut self, phys: u32, from: u64, end: u64) -> Option<(HookId, bool, PcHook)> {
+        let h = self.hooks.get_mut(&phys)?.iter_mut().find(|h| h.id.0 >= from).filter(|h| h.id.0 < end)?;
+        Some((h.id, h.once, h.f.take()?))
     }
 
     pub fn hook_addresses(&self) -> Vec<u32> {
@@ -997,5 +1048,98 @@ impl crate::state::Field for Bus {
             self.clear_code_pages();
             self.invalidation = Invalidation::default();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    type Log = Arc<Mutex<Vec<&'static str>>>;
+
+    /// A hook that writes `name` to the log and answers `action`.
+    fn note(log: &Log, name: &'static str, action: HookAction) -> PcHook {
+        let log = log.clone();
+        Box::new(move |_, _| {
+            log.lock().unwrap().push(name);
+            action
+        })
+    }
+
+    fn ran(log: &Log) -> Vec<&'static str> {
+        std::mem::take(&mut *log.lock().unwrap())
+    }
+
+    #[test]
+    fn every_hook_on_an_address_runs_in_order() {
+        const PC: u32 = 0x8001_0000;
+        let mut bus = Bus::new(&[], VideoStandard::Ntsc);
+        let mut cpu = Cpu::new();
+        let log = Log::default();
+        let a = bus.add_hook(PC, note(&log, "a", HookAction::Continue));
+        // The same word through KSEG1.
+        bus.add_hook(0xA001_0000, note(&log, "b", HookAction::Continue));
+        bus.add_hook_once(PC, note(&log, "once", HookAction::Continue));
+        assert!(bus.hook_at(PC) && !bus.hook_at(PC + 4));
+        assert_eq!(bus.run_hook(&mut cpu, PC), HookAction::Continue);
+        assert_eq!(ran(&log), ["a", "b", "once"]);
+        assert_eq!(bus.run_hook(&mut cpu, PC), HookAction::Continue);
+        assert_eq!(ran(&log), ["a", "b"]);
+
+        // Removing one keeps the others.
+        let version = bus.hooks_version();
+        bus.remove_hook(a);
+        assert!(!bus.has_hook(a) && bus.hook_at(PC) && bus.hooks_version() > version);
+        bus.run_hook(&mut cpu, PC);
+        assert_eq!(ran(&log), ["b"]);
+
+        // A redirect moved the PC: the hooks after it don't run.
+        let r = bus.add_hook(PC, note(&log, "redirect", HookAction::Redirect));
+        let after = bus.add_hook(PC, note(&log, "after", HookAction::Continue));
+        assert_eq!(bus.run_hook(&mut cpu, PC), HookAction::Redirect);
+        assert_eq!(ran(&log), ["b", "redirect"]);
+        bus.remove_hook(r);
+        bus.remove_hook(after);
+
+        // Hooks changing the hooks at their own address while they run: one
+        // removed doesn't run, one added waits for the next time, and a hook
+        // can remove itself.
+        let doomed: Arc<Mutex<Vec<HookId>>> = Default::default();
+        let (l, d) = (log.clone(), doomed.clone());
+        let mut late = Some(note(&log, "late", HookAction::Continue));
+        let changer = bus.add_hook(
+            PC,
+            Box::new(move |_, bus| {
+                l.lock().unwrap().push("changer");
+                for id in d.lock().unwrap().drain(..) {
+                    bus.remove_hook(id);
+                }
+                if let Some(h) = late.take() {
+                    bus.add_hook(PC, h);
+                }
+                HookAction::Continue
+            }),
+        );
+        let removed = bus.add_hook(PC, note(&log, "removed", HookAction::Continue));
+        doomed.lock().unwrap().push(removed);
+        bus.run_hook(&mut cpu, PC);
+        assert_eq!(ran(&log), ["b", "changer"]);
+        doomed.lock().unwrap().push(changer);
+        bus.run_hook(&mut cpu, PC);
+        assert_eq!(ran(&log), ["b", "changer", "late"]);
+        bus.run_hook(&mut cpu, PC);
+        assert_eq!(ran(&log), ["b", "late"]);
+        assert!(!bus.has_hook(changer) && !bus.has_hook(removed));
+
+        // The last one gone, the address is free again.
+        assert_eq!(bus.hook_addresses(), [PC]);
+        let ids: Vec<HookId> = bus.hooks.values().flatten().map(|h| h.id).collect();
+        for id in ids {
+            bus.remove_hook(id);
+        }
+        assert!(!bus.hook_at(PC) && !bus.has_hooks);
+        assert_eq!(bus.run_hook(&mut cpu, PC), HookAction::Continue);
+        assert!(ran(&log).is_empty());
     }
 }

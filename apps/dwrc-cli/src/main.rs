@@ -179,10 +179,9 @@ fn run(args: &[String]) -> Result<()> {
         psx.enable_fast_boot(exe);
     }
     if flag(args, "--dump-entry") {
-        psx.bus.add_hook(
+        psx.bus.add_hook_once(
             entry,
             Box::new(move |cpu, bus| {
-                bus.remove_hook(entry);
                 println!("=== state at game entry {entry:08x}");
                 println!("cop0 {:?}", cpu.cop0);
                 println!("regs {:08x?}", &cpu.regs);

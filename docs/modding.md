@@ -214,7 +214,7 @@ Scripts run in an isolated, sandboxed Lua 5.4 state per mod (see *Safety*). The 
 | `dwrc.log(text)` | write to the log (shown in the F10 mod log); `print` does the same |
 | `dwrc.on_frame(fn(ctx))` | after every video frame |
 | `dwrc.on_input(fn(buttons) -> buttons)` | before every frame; return a modified controller state |
-| `dwrc.on_exec(addr, fn(ctx) -> bool)` | when the CPU reaches `addr`; return `true` if you changed the PC. May also be called later (from `on_frame`, say, once the code is in memory): the hook goes in before the next frame |
+| `dwrc.on_exec(addr, fn(ctx) -> bool)` | when the CPU reaches `addr`; return `true` if you changed the PC. May also be called later (from `on_frame`, say, once the code is in memory): the hook goes in before the next frame. Several hooks on one address (from one mod or several) all run, in load order (a hook added later runs after the ones already there); once one returns `true` the PC has moved, and the rest don't run that time |
 | `dwrc.save()` | write `dwrc.data` now |
 | `dwrc.set_speed(n)`, `dwrc.speed()` | run the console `n` times faster than real time (1 to 4; 1 is normal). The launcher paces itself to match and still plays sound in real time |
 | `dwrc.set_realtime_voices(mask)` | sound chip voices (bit 0 = voice 0 … bit 23) that keep real-time pitch and timing while sped up; the others play faster like the rest of the game |

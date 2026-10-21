@@ -82,11 +82,16 @@ pub enum HookAction {
     /// Execute the original instruction at this address.
     Continue,
     /// The hook changed `cpu.pc`/`cpu.next_pc` (e.g. returned from a
-    /// replaced function); resume there.
+    /// replaced function); resume there. Hooks at the same address added
+    /// after this one don't run this time.
     Redirect,
 }
 
 pub type PcHook = Box<dyn FnMut(&mut Cpu, &mut Bus) -> HookAction + Send>;
+
+/// One PC hook, as returned by `Bus::add_hook` (for `Bus::remove_hook`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HookId(u64);
 
 /// A complete console.
 pub struct Psx {
@@ -96,6 +101,8 @@ pub struct Psx {
     pub frame_count: u64,
     /// The executable fast boot side-loads (host state, kept to re-arm it).
     fast_boot: Option<dwrc_disc::PsxExe>,
+    /// Fast boot's hook at `SHELL_ENTRY`, gone once it ran.
+    fast_boot_hook: Option<HookId>,
 }
 
 impl Psx {
@@ -103,7 +110,7 @@ impl Psx {
         let bus = Bus::new(bios, standard);
         let mut cpu = Cpu::new();
         cpu.reset();
-        Self { cpu, bus, engine: Box::new(Interpreter), frame_count: 0, fast_boot: None }
+        Self { cpu, bus, engine: Box::new(Interpreter), frame_count: 0, fast_boot: None, fast_boot_hook: None }
     }
 
     pub fn set_engine(&mut self, engine: Box<dyn ExecEngine>) {
@@ -177,11 +184,13 @@ impl Psx {
     }
 
     fn arm_fast_boot(&mut self) {
+        if let Some(id) = self.fast_boot_hook.take() {
+            self.bus.remove_hook(id);
+        }
         let mut exe = self.fast_boot.clone();
-        self.bus.add_hook(
+        let id = self.bus.add_hook_once(
             SHELL_ENTRY,
             Box::new(move |cpu, bus| {
-                bus.remove_hook(SHELL_ENTRY);
                 if let Some(e) = exe.take() {
                     sideload_exe(cpu, bus, &e);
                     HookAction::Redirect
@@ -190,11 +199,12 @@ impl Psx {
                 }
             }),
         );
+        self.fast_boot_hook = Some(id);
     }
 
     /// Whether fast boot is still waiting for the BIOS to reach the shell.
     pub fn fast_boot_pending(&self) -> bool {
-        self.fast_boot.is_some() && self.bus.has_hook(SHELL_ENTRY)
+        self.fast_boot.is_some() && self.fast_boot_hook.is_some_and(|id| self.bus.has_hook(id))
     }
 
     /// Sets fast boot up for a state that was just loaded: armed again for a
@@ -206,8 +216,8 @@ impl Psx {
         }
         if pending {
             self.arm_fast_boot();
-        } else {
-            self.bus.remove_hook(SHELL_ENTRY);
+        } else if let Some(id) = self.fast_boot_hook.take() {
+            self.bus.remove_hook(id);
         }
     }
 }
