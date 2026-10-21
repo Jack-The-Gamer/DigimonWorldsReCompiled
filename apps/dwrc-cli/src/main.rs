@@ -228,7 +228,15 @@ fn run(args: &[String]) -> Result<()> {
     }
     if flag(args, "--serve") {
         serve(&mut psx, &mut mod_rt, &script, &states)?;
+        for (slot, path) in &card_paths {
+            if let Some(c) = &psx.bus.sio.cards[*slot] {
+                std::fs::write(path, &c.data)?;
+            }
+        }
         println!("engine: {} {}", psx.engine_name(), psx.engine_report());
+        if flag(args, "--trace-bios") {
+            print_bios_calls(&bios_calls.lock().unwrap());
+        }
         return Ok(());
     }
     let t0 = Instant::now();
@@ -275,10 +283,7 @@ fn run(args: &[String]) -> Result<()> {
         }
     }
     if flag(args, "--trace-bios") {
-        println!("BIOS functions called by the game (table:function  calls  first frame  example caller):");
-        for ((t, n), (count, first, ra)) in bios_calls.lock().unwrap().iter() {
-            println!("  {t:02X}:{n:02X}  {count:>9}  {first:>6}  {ra:08x}");
-        }
+        print_bios_calls(&bios_calls.lock().unwrap());
     }
     if flag(args, "--pcs") {
         // Sample where the CPU spends time over a few frames.
@@ -347,6 +352,7 @@ fn run(args: &[String]) -> Result<()> {
 /// pcs <frames> [lo hi]             sample where the CPU runs (optionally only lo..hi)
 /// prof <frames> [ms] [BTN[+BTN]]   host time per frame (buttons held); lists frames slower than ms
 /// cd                               what the CD-ROM drive is doing (mode, XA-ADPCM)
+/// watch <addr> / unwatch           note each change of the word at addr (and the instruction) until unwatch
 /// wav <file> <frames> [BTN[+BTN]]  run frames (buttons held) and save their audio
 /// frame                            print the frame number
 /// quit
@@ -366,6 +372,8 @@ fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button
     let mut audio = Vec::new();
     // The audio of the frames run while `wav` records.
     let recording: std::cell::RefCell<Option<Vec<i16>>> = std::cell::RefCell::new(None);
+    // While `watch` is on: the address, its last value and the changes seen.
+    let watching: std::cell::RefCell<Option<(u32, u32, Vec<String>)>> = std::cell::RefCell::new(None);
     let mut notes: Vec<String> = Vec::new();
     let mut step = |psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, held: &[Button], frame: &mut u64, notes: &mut Vec<String>| {
         *frame += 1;
@@ -381,7 +389,22 @@ fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button
         state.buttons = mods.filter_input(state.buttons);
         psx.bus.sio.pads[0].state = state;
         mods.apply_speed(psx);
-        psx.run_frame();
+        if let Some((a, last, seen)) = watching.borrow_mut().as_mut() {
+            // One instruction at a time, noting each change of the word at
+            // `a` and the instruction that made it (exact with --engine interp).
+            psx.bus.frame_done = false;
+            while !psx.bus.frame_done {
+                psx.run_cycles(1);
+                let v = psx.bus.peek32(*a);
+                if v != *last {
+                    seen.push(format!("frame {}: {:08x} -> {:08x} at {:08x}", *frame, *last, v, psx.cpu.current_pc));
+                    *last = v;
+                }
+            }
+            psx.frame_count += 1;
+        } else {
+            psx.run_frame();
+        }
         mods.on_frame(psx, *frame);
         notes.extend(dwrc_runtime::savestate::handle_requests(states, psx, mods, &mut false));
         notes.extend(mods.take_notices());
@@ -510,6 +533,15 @@ fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button
                 Ok(v.iter().take(40).map(|(pc, n)| format!("{pc:08x}:{n}")).collect::<Vec<_>>().join(" "))
             }
             ["cd"] => Ok(psx.bus.cdrom.describe()),
+            ["watch", a] => {
+                let a = num(a)?;
+                *watching.borrow_mut() = Some((a, psx.bus.peek32(a), Vec::new()));
+                Ok(format!("watching {a:08x}"))
+            }
+            ["unwatch"] => {
+                let seen = watching.borrow_mut().take().map(|w| w.2).unwrap_or_default();
+                Ok(if seen.is_empty() { "no change".to_string() } else { seen.join(" | ") })
+            }
             ["wav", path, n, rest @ ..] => {
                 let held = match rest.first() {
                     Some(b) => b.split('+').map(|b| parse_button(b).context("unknown button")).collect::<Result<Vec<_>>>()?,
@@ -553,6 +585,13 @@ fn save_png(path: &Path, w: u32, h: u32, argb: &[u32]) -> Result<()> {
     }
     wr.write_image_data(&data)?;
     Ok(())
+}
+
+fn print_bios_calls(calls: &std::collections::BTreeMap<(u32, u32), (u64, u64, u32)>) {
+    println!("BIOS functions called by the game (table:function  calls  first frame  example caller):");
+    for ((t, n), (count, first, ra)) in calls.iter() {
+        println!("  {t:02X}:{n:02X}  {count:>9}  {first:>6}  {ra:08x}");
+    }
 }
 
 fn save_wav(path: &Path, samples: &[i16]) -> Result<()> {

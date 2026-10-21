@@ -28,10 +28,10 @@ Build with `cargo build --release -p dwrc-cli`; the tool is `target/release/dwrc
 | `--input "frame:button:len,..."` | scripted input, e.g. `1000:start:10,1200:x:6` (buttons: start select x o t s up down left right l1 r1 l2 r2) |
 | `--mod DIR` | enable a mod folder (repeatable) |
 | `--tty` | echo the BIOS/game debug console |
-| `--card1 FILE.mcd` / `--card2` | use (and afterwards save) memory card images |
+| `--card1 FILE.mcd` / `--card2` | use (and afterwards save, also after `--serve`) memory card images |
 | `--pal60` | run Digimon World 2003 (Europe) in its own 60 Hz mode, as the launcher does by default |
 | `--states DIR` | where save states go (made by mods or the `--serve` commands); default: a folder in the temp directory |
-| `--trace-bios` | list the BIOS functions the game calls (table, number, count, first frame) |
+| `--trace-bios` | list the BIOS functions the game calls (table, number, count, first frame), also after `--serve`: run the same commands with and without the action you are curious about (saving, say) and compare |
 | `--dump-entry` | print the hardware state when the game's entry point is reached |
 | `--pcs` | sample where the CPU spends its time at the end of the run |
 | `--dump-ram FILE` | write main RAM (2 MiB from `0x80000000`) at the end of the run |
@@ -57,6 +57,7 @@ frame number, and `--mod` folders run as usual.
 | `prof N [MS] [BTN[+BTN…]]` | run N frames (holding the buttons) and time each on the host: the average, the worst, and every frame slower than `MS` (default 12), with the time spent translating code on the emulation thread in it (only with `recomp-inline` or `validate`; `recomp` translates in the background) |
 | `cd` | what the CD-ROM drive is doing: position, mode (double speed, XA-ADPCM, filter), idle/seeking/reading/playing, the XA filter and how many XA-ADPCM samples it has decoded (to tell streamed music from sequenced music) |
 | `wav FILE N [BTN[+BTN…]]` | run N frames (holding the buttons) and save their audio as a WAV, e.g. to compare music at normal speed and fast-forward |
+| `watch ADDR` … `unwatch` | while on, the console runs one instruction at a time and notes every change of the 32-bit word at `ADDR`, with the address of the instruction that made it; `unwatch` prints them (`frame N: old -> new at PC`). Slow: use it around the moment you are after, with `--engine interp` for exact addresses. The quickest way from a value in RAM to the code that keeps it |
 | `frame` | print the frame number |
 | `quit` | stop |
 
