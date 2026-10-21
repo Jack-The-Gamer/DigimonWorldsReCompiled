@@ -1222,6 +1222,7 @@ dependencies = [
  "hex",
  "log",
  "mlua",
+ "png 0.17.16",
  "semver",
  "serde",
  "serde_json",

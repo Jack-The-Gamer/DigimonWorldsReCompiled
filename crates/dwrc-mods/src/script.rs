@@ -22,6 +22,9 @@
 //! dwrc.save_state(slot)  -- save the console to slot 1..99 after this frame
 //! dwrc.load_state(slot)  -- load slot 1..99 after this frame
 //! dwrc.notify(text)      -- a short message on screen
+//! dwrc.show_image(name, file [, {corner=, x=, y=, scale=}]) -- a PNG from
+//!                          the mod's folder over the picture, until
+//! dwrc.hide_image(name)
 //! ```
 //!
 //! `dwrc.on_exec` may also be called later (from `on_frame`, say, once the
@@ -47,6 +50,8 @@
 use anyhow::{anyhow, Result};
 use dwrc_psx::{Bus, Button, Cpu, HookAction};
 use mlua::{Function, Lua, LuaSerdeExt, RegistryKey, UserData, UserDataMethods, Value};
+use crate::overlay::{self, Corner, Overlay};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -68,6 +73,11 @@ struct HostState {
     key_cbs: Vec<RegistryKey>,
     requests: Vec<StateRequest>,
     notices: Vec<String>,
+    /// Images on screen (`dwrc.show_image`), in the order first shown.
+    images: Vec<Overlay>,
+    images_changed: bool,
+    /// Decoded image files, by path.
+    image_files: HashMap<PathBuf, Arc<overlay::Image>>,
     exec_hooks: Vec<(u32, Arc<RegistryKey>)>,
     /// Requested console speed (1 = real time).
     speed: u32,
@@ -83,6 +93,9 @@ impl HostState {
             key_cbs: Vec::new(),
             requests: Vec::new(),
             notices: Vec::new(),
+            images: Vec::new(),
+            images_changed: false,
+            image_files: HashMap::new(),
             exec_hooks: Vec::new(),
             speed: 1,
             realtime_voices: 0,
@@ -415,6 +428,65 @@ impl ScriptHost {
                 .map_err(le)?,
             )
             .map_err(le)?;
+            let st = state.clone();
+            let root = path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
+            let root = root.canonicalize().unwrap_or(root);
+            let mid = id.to_string();
+            api.set(
+                "show_image",
+                lua.create_function(move |_, (name, file, opts): (String, String, Option<mlua::Table>)| {
+                    let err = |m: String| mlua::Error::runtime(format!("show_image: {m}"));
+                    // A .png file inside the mod's folder.
+                    let p = root.join(&file);
+                    let p = p.canonicalize().map_err(|_| err(format!("'{file}' not found in the mod folder")))?;
+                    if !p.starts_with(&root) || !p.extension().is_some_and(|e| e.eq_ignore_ascii_case("png")) {
+                        return Err(err(format!("'{file}' must be a .png file in the mod folder")));
+                    }
+                    let (mut corner, mut x, mut y, mut scale) = (Corner::TopLeft, 4.0, 4.0, 1.0);
+                    if let Some(o) = &opts {
+                        if let Some(c) = o.get::<Option<String>>("corner")? {
+                            corner = Corner::parse(&c).ok_or_else(|| err(format!("unknown corner '{c}' (top_left, top_right, bottom_left or bottom_right)")))?;
+                        }
+                        x = o.get::<Option<f32>>("x")?.unwrap_or(x).clamp(-overlay::GRID_W, overlay::GRID_W);
+                        y = o.get::<Option<f32>>("y")?.unwrap_or(y).clamp(-overlay::GRID_H, overlay::GRID_H);
+                        scale = o.get::<Option<f32>>("scale")?.unwrap_or(scale).clamp(0.125, 8.0);
+                    }
+                    let mut s = st.lock().unwrap();
+                    let image = match s.image_files.get(&p) {
+                        Some(i) => i.clone(),
+                        None => {
+                            let i = Arc::new(overlay::load_png(&p).map_err(|e| err(format!("{e:#}")))?);
+                            s.image_files.insert(p, i.clone());
+                            i
+                        }
+                    };
+                    let o = Overlay { key: format!("{mid}/{name}"), image, corner, x, y, scale };
+                    match s.images.iter().position(|i| i.key == o.key) {
+                        Some(i) => s.images[i] = o,
+                        None if s.images.len() >= overlay::MAX_PER_MOD => return Err(err(format!("a mod may show at most {} images", overlay::MAX_PER_MOD))),
+                        None => s.images.push(o),
+                    }
+                    s.images_changed = true;
+                    Ok(())
+                })
+                .map_err(le)?,
+            )
+            .map_err(le)?;
+            let st = state.clone();
+            let mid = id.to_string();
+            api.set(
+                "hide_image",
+                lua.create_function(move |_, name: String| {
+                    let key = format!("{mid}/{name}");
+                    let mut s = st.lock().unwrap();
+                    let n = s.images.len();
+                    s.images.retain(|i| i.key != key);
+                    s.images_changed |= s.images.len() != n;
+                    Ok(())
+                })
+                .map_err(le)?,
+            )
+            .map_err(le)?;
             let buttons = lua.create_table().map_err(le)?;
             for b in Button::ALL {
                 buttons.set(format!("{b:?}"), 1u32 << (b as u32)).map_err(le)?;
@@ -579,6 +651,16 @@ impl ScriptHost {
         std::mem::take(&mut self.state.lock().unwrap().notices)
     }
 
+    /// The images this mod shows (`dwrc.show_image`).
+    pub fn images(&self) -> Vec<Overlay> {
+        self.state.lock().unwrap().images.clone()
+    }
+
+    /// Whether the images changed since the last call.
+    pub fn take_images_changed(&mut self) -> bool {
+        std::mem::take(&mut self.state.lock().unwrap().images_changed)
+    }
+
     pub fn filter_input(&mut self, buttons: u16) -> Result<u16> {
         let fns = {
             let st = self.state.lock().unwrap();
@@ -703,6 +785,44 @@ mod tests {
         assert_eq!(host.take_requests(), vec![StateRequest::Save(2), StateRequest::Load(2)]);
         assert!(host.take_requests().is_empty());
         assert_eq!(host.take_notices(), vec!["key F5 with ctrl".to_string()]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn images_over_the_picture() {
+        let d = std::env::temp_dir().join(format!("dwrc-images-{}", std::process::id()));
+        std::fs::create_dir_all(d.join("img")).unwrap();
+        let mut e = png::Encoder::new(std::fs::File::create(d.join("img/dot.png")).unwrap(), 2, 1);
+        e.set_color(png::ColorType::Rgba);
+        e.set_depth(png::BitDepth::Eight);
+        e.write_header().unwrap().write_image_data(&[255, 0, 0, 255, 0, 0, 0, 0]).unwrap();
+        std::fs::write(d.join("notes.txt"), "x").unwrap();
+        std::fs::write(
+            d.join("main.lua"),
+            r#"
+            dwrc.show_image("off", "img/dot.png", { corner = "top_right", x = 6, y = 5, scale = 2 })
+            dwrc.show_image("other", "img/dot.png")
+            assert(not pcall(dwrc.show_image, "x", "../outside.png"))
+            assert(not pcall(dwrc.show_image, "x", "notes.txt"))
+            assert(not pcall(dwrc.show_image, "x", "missing.png"))
+            assert(not pcall(dwrc.show_image, "x", "img/dot.png", { corner = "middle" }))
+            dwrc.on_key(function(ctx, key)
+              if key == "R" then dwrc.hide_image("off") end
+            end)
+            "#,
+        )
+        .unwrap();
+        let mut host = ScriptHost::load("m", dwrc_disc::GameId::Dw3, "SLES-03936", &d.join("main.lua"), Default::default(), d.join("data")).unwrap();
+        let mut psx = dwrc_psx::Psx::new(&vec![0u8; 512 * 1024], dwrc_psx::VideoStandard::Pal);
+        assert!(host.take_images_changed() && !host.take_images_changed());
+        let im = host.images();
+        assert_eq!(im.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(), ["m/off", "m/other"]);
+        assert_eq!(im[0].rect(), [310.0, 5.0, 4.0, 2.0]);
+        assert_eq!(im[1].rect(), [4.0, 4.0, 2.0, 1.0]);
+        assert!(Arc::ptr_eq(&im[0].image, &im[1].image));
+        host.on_key(&mut psx.cpu, &mut psx.bus, 1, "R", false, false, false).unwrap();
+        assert!(host.take_images_changed());
+        assert_eq!(host.images().len(), 1);
         let _ = std::fs::remove_dir_all(&d);
     }
 }

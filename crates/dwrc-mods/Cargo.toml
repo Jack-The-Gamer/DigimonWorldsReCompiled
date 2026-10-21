@@ -14,6 +14,7 @@ serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 hex.workspace = true
+png.workspace = true
 mlua = { version = "0.10", features = ["lua54", "vendored", "send", "serialize"] }
 dwrc-mips.workspace = true
 semver = "1"

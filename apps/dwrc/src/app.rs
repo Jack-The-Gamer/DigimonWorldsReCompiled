@@ -78,6 +78,8 @@ pub struct App {
     library_h: f32,
     /// Short messages over the game picture (mods, save states), newest last.
     osd: Vec<(String, Instant)>,
+    /// Images mods show over the picture (`dwrc.show_image`).
+    overlays: Vec<(dwrc_mods::overlay::Overlay, TextureHandle)>,
 }
 
 impl App {
@@ -114,6 +116,7 @@ impl App {
             crt_error,
             library_h: 0.0,
             osd: Vec::new(),
+            overlays: Vec::new(),
             files_hovering: false,
             open_files,
             paths,
@@ -169,6 +172,7 @@ impl App {
         let emu = EmuHandle::start(self.paths.clone(), self.lib.clone(), self.cfg.clone(), g, mods, self.audio.clone());
         self.emu = Some(emu);
         self.game_tex = None;
+        self.overlays.clear();
         self.last_seq = 0;
         self.show_pause = false;
         self.show_mods_overlay = false;
@@ -913,6 +917,21 @@ impl App {
         for n in std::mem::take(&mut *emu.shared.notices.lock().unwrap()) {
             self.osd.push((n, Instant::now()));
         }
+        if let Some(list) = emu.shared.overlays.lock().unwrap().take() {
+            let opts = if matches!(self.cfg.video.filter, Filter::Nearest) { TextureOptions::NEAREST } else { TextureOptions::LINEAR };
+            let old = std::mem::take(&mut self.overlays);
+            for o in list {
+                // Keep the texture of an image that is still the same.
+                let tex = match old.iter().find(|(p, _)| Arc::ptr_eq(&p.image, &o.image)) {
+                    Some((_, t)) => t.clone(),
+                    None => {
+                        let img = egui::ColorImage::from_rgba_unmultiplied([o.image.width as usize, o.image.height as usize], &o.image.rgba);
+                        ctx.load_texture(format!("mod image {}", o.key), img, opts)
+                    }
+                };
+                self.overlays.push((o, tex));
+            }
+        }
         self.osd.retain(|(_, t)| t.elapsed() < OSD_TIME);
         if self.osd.len() > 4 {
             self.osd.drain(..self.osd.len() - 4);
@@ -958,6 +977,7 @@ impl App {
         }
         egui::CentralPanel::default().frame(egui::Frame::default().fill(Color32::BLACK)).show(ctx, |ui| {
             let avail = ui.max_rect();
+            let mut image_rects = Vec::new();
             if let Some(t) = &self.game_tex {
                 let (w, h) = (self.game_size.0 as f32, self.game_size.1 as f32);
                 let size = match self.cfg.video.aspect {
@@ -984,6 +1004,14 @@ impl App {
                         ui.painter().image(t.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
                     }
                 }
+                // Mods' images, on a 320×240 grid over the picture.
+                let (sx, sy) = (rect.width() / dwrc_mods::overlay::GRID_W, rect.height() / dwrc_mods::overlay::GRID_H);
+                for (o, tex) in &self.overlays {
+                    let [l, t, w, h] = o.rect();
+                    let r = egui::Rect::from_min_size(rect.min + Vec2::new(l * sx, t * sy), Vec2::new(w * sx, h * sy));
+                    image_rects.push(r);
+                    ui.painter().with_clip_rect(rect).image(tex.id(), r, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                }
             } else {
                 ui.painter().text(avail.center(), Align2::CENTER_CENTER, "Starting…", egui::FontId::proportional(20.0), MUTED);
             }
@@ -997,7 +1025,14 @@ impl App {
                 );
             }
             if status.mod_speed > 1 {
-                fast_forward_badge(ui.painter(), avail.right_top() + Vec2::new(-12.0, 10.0), status.mod_speed);
+                // Below any mod image in the top right corner.
+                let mut y = 10.0;
+                for r in &image_rects {
+                    if r.right() > avail.right() - 140.0 && r.top() < avail.top() + y + 26.0 {
+                        y = f32::max(y, r.bottom() - avail.top() + 6.0);
+                    }
+                }
+                fast_forward_badge(ui.painter(), avail.right_top() + Vec2::new(-12.0, y), status.mod_speed);
             }
             let top = if self.cfg.video.show_fps { 30.0 } else { 10.0 };
             for (i, (msg, t)) in self.osd.iter().enumerate() {

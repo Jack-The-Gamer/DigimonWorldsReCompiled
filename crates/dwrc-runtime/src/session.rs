@@ -37,6 +37,8 @@ pub struct Session {
     states: StateStore,
     /// Messages for the screen (from mods and save states).
     notices: Vec<String>,
+    /// Images the mods show over the picture, when they changed.
+    overlays: Option<Vec<dwrc_mods::overlay::Overlay>>,
 }
 
 /// Information shown before starting (so the UI can explain problems).
@@ -142,6 +144,7 @@ impl Session {
             sixty_hz,
             states,
             notices: Vec::new(),
+            overlays: None,
         })
     }
 
@@ -183,6 +186,9 @@ impl Session {
         let n = crate::savestate::handle_requests(&self.states, &mut self.psx, &mut self.mods, &mut loaded);
         self.notices.extend(n);
         self.notices.extend(self.mods.take_notices());
+        if let Some(o) = self.mods.take_overlays() {
+            self.overlays = Some(o);
+        }
         if loaded {
             // The console's clock went back (or forward) with the state.
             self.last_frame_cycles = self.psx.bus.cycles;
@@ -192,6 +198,12 @@ impl Session {
     /// Messages for the screen since the last call.
     pub fn take_notices(&mut self) -> Vec<String> {
         std::mem::take(&mut self.notices)
+    }
+
+    /// The images the mods show over the picture (`dwrc.show_image`), if
+    /// they changed since the last call.
+    pub fn take_overlays(&mut self) -> Option<Vec<dwrc_mods::overlay::Overlay>> {
+        self.overlays.take()
     }
 
     /// How many times faster than real time the console runs (set by mods).

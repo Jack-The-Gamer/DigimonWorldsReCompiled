@@ -3,6 +3,7 @@
 
 use crate::audio::AudioShared;
 use dwrc_disc::GameId;
+use dwrc_mods::overlay::Overlay;
 use dwrc_mods::EnabledMod;
 use dwrc_psx::PadState;
 use dwrc_runtime::{Config, Library, Paths, Session};
@@ -44,6 +45,8 @@ pub struct Shared {
     pub status: Mutex<EmuStatus>,
     /// Messages for the screen (mods, save states), taken by the UI.
     pub notices: Mutex<Vec<String>>,
+    /// Images mods show over the picture, when they changed (taken by the UI).
+    pub overlays: Mutex<Option<Vec<Overlay>>>,
 }
 
 pub enum EmuCmd {
@@ -69,6 +72,7 @@ impl EmuHandle {
             quit: AtomicBool::new(false),
             status: Mutex::new(EmuStatus::default()),
             notices: Mutex::new(Vec::new()),
+            overlays: Mutex::new(None),
         });
         let (tx, rx) = channel();
         let sh = shared.clone();
@@ -150,6 +154,9 @@ fn run(
         let notices = session.take_notices();
         if !notices.is_empty() {
             sh.notices.lock().unwrap().extend(notices);
+        }
+        if let Some(o) = session.take_overlays() {
+            *sh.overlays.lock().unwrap() = Some(o);
         }
         if sh.paused.load(Ordering::Relaxed) {
             std::thread::sleep(Duration::from_millis(10));

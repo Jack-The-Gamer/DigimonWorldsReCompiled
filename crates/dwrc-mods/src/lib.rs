@@ -18,6 +18,7 @@
 
 pub mod disc;
 pub mod manifest;
+pub mod overlay;
 pub mod package;
 pub mod patches;
 pub mod script;
@@ -354,6 +355,23 @@ impl ModRuntime {
     /// On-screen messages from the scripts since the last call.
     pub fn take_notices(&mut self) -> Vec<String> {
         self.scripts.iter_mut().flat_map(|s| s.take_notices()).collect()
+    }
+
+    /// Every image the scripts show (`dwrc.show_image`), in load order, if
+    /// any changed since the last call.
+    pub fn take_overlays(&mut self) -> Option<Vec<overlay::Overlay>> {
+        let mut changed = false;
+        let mut all = Vec::new();
+        for s in &mut self.scripts {
+            changed |= s.take_images_changed();
+            all.extend(s.images());
+        }
+        changed.then_some(all)
+    }
+
+    /// Every image the scripts show now.
+    pub fn overlays(&self) -> Vec<overlay::Overlay> {
+        self.scripts.iter().flat_map(|s| s.images()).collect()
     }
 
     /// Lets scripts transform the controller state before each frame.

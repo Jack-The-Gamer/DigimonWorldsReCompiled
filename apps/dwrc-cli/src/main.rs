@@ -272,6 +272,9 @@ fn run(args: &[String]) -> Result<()> {
         if let Some(dir) = &shots {
             if f % every == 0 {
                 let (w, h) = psx.bus.gpu.render_display(&mut buf);
+                for o in mod_rt.overlays() {
+                    o.paint(&mut buf, w, h);
+                }
                 save_png(&dir.join(format!("frame_{f:06}.png")), w, h, &buf)?;
             }
         }
@@ -453,6 +456,9 @@ fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button
             ["shot", path] => {
                 let mut buf = Vec::new();
                 let (wd, ht) = psx.bus.gpu.render_display(&mut buf);
+                for o in mods.overlays() {
+                    o.paint(&mut buf, wd, ht);
+                }
                 save_png(Path::new(path), wd, ht, &buf)?;
                 Ok(format!("{path} {wd}x{ht}"))
             }

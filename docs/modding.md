@@ -221,6 +221,8 @@ Scripts run in an isolated, sandboxed Lua 5.4 state per mod (see *Safety*). The 
 | `dwrc.on_key(fn(ctx, key, mods))` | a key pressed on the keyboard while the game runs: `key` is its name (`"1"`, `"A"`, `"F5"`, `"Space"`…, the key's place on the keyboard, so Shift + 1 is `"1"` with `mods.shift`), `mods` has `shift`, `ctrl` and `alt`. Not called for Esc, Tab and F10 to F12, which the launcher uses, or while the game is paused (1.3+) |
 | `dwrc.save_state(slot)`, `dwrc.load_state(slot)` | save the whole console to slot 1 to 99, or load it, once the current frame is done. Slots belong to the release (kept in the data folder's `states/<serial>/`), only load with the BIOS they were saved with, and never include memory cards. The player sees "Saved state 1", "Slot 3 is empty" and the like (1.3+) |
 | `dwrc.notify(text)` | show a short message over the game picture (1.3+) |
+| `dwrc.show_image(name, file [, opts])` | show a PNG from the mod's folder over the game picture until `dwrc.hide_image(name)`; showing the same `name` again moves or replaces it. `opts`: `corner` (`"top_left"`, the default, `"top_right"`, `"bottom_left"` or `"bottom_right"`), `x` and `y` (distance from that corner's edges, default 4) and `scale` (default 1). Positions and sizes are in pixels of a 320×240 grid laid over the picture, whatever resolution the game uses, so an image keeps its place and size; a 64×64 image at `scale = 0.375` covers 24×24 of the grid. Images up to 256×256 and 1 MiB, 16 per mod (1.4+) |
+| `dwrc.hide_image(name)` | take that image away again (1.4+) |
 
 The `ctx` passed to callbacks:
 
@@ -278,6 +280,26 @@ dwrc.on_key(function(ctx, key, mods)
   local slot = tonumber(key)
   if not slot or slot < 1 or slot > 5 or mods.ctrl or mods.alt then return end
   if mods.shift then dwrc.load_state(slot) else dwrc.save_state(slot) end
+end)
+```
+
+### Example: a switch with a sign on screen
+
+The [DW3 Disable Random Encounters mod](https://github.com/Jack-The-Gamer/DigimonWorldsReCompiled-mod-index/tree/HEAD/mods/Jack-The-Gamer@dw3-disable-random-encounters)
+switches random battles off and on with the R key, and shows
+`encounters-off.png` (a file in the mod's folder) in the top right corner
+while they are off:
+
+```lua
+local off = false
+dwrc.on_key(function(ctx, key, mods)
+  if key ~= "R" or mods.ctrl or mods.alt or mods.shift then return end
+  off = not off
+  if off then
+    dwrc.show_image("off", "encounters-off.png", { corner = "top_right", x = 6, y = 6, scale = 0.375 })
+  else
+    dwrc.hide_image("off")
+  end
 end)
 ```
 

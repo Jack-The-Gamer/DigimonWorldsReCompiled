@@ -23,7 +23,7 @@ Build with `cargo build --release -p dwrc-cli`; the tool is `target/release/dwrc
 | `--frames N` | frames to run (default 600) |
 | `--fast` | fast boot (with `--bios` only) |
 | `--engine interp\|recomp\|validate` | CPU engine (default interp). Two more for working on the recompiler: `recomp-inline` translates each block before it first runs (as check mode does), `recomp-off` never translates (every block on the interpreter, with translated timing); both end in exactly the same state as `recomp` |
-| `--shots DIR --every K` | save a PNG every K frames, plus `vram.png` at the end |
+| `--shots DIR --every K` | save a PNG every K frames (with the images mods show), plus `vram.png` at the end |
 | `--wav FILE` | record audio |
 | `--input "frame:button:len,..."` | scripted input, e.g. `1000:start:10,1200:x:6` (buttons: start select x o t s up down left right l1 r1 l2 r2) |
 | `--mod DIR` | enable a mod folder (repeatable) |
@@ -46,7 +46,7 @@ frame number, and `--mod` folders run as usual.
 |---|---|
 | `press BTN[+BTN…] N` | hold buttons for N frames, e.g. `press left+down 30` |
 | `wait N` | run N frames with nothing pressed |
-| `shot FILE.png` | save the current picture |
+| `shot FILE.png` | save the current picture (with the images mods show, `dwrc.show_image`) |
 | `ram FILE` | write main RAM |
 | `vram FILE` | write video RAM (1024×512 16-bit pixels, little-endian, row by row) |
 | `peek ADDR [N]` | print N bytes of memory in hex |
