@@ -558,13 +558,21 @@ impl ScriptHost {
                 addr,
                 Box::new(move |cpu, bus| {
                     let frame = 0;
+                    let before = state.lock().unwrap().realtime_voices;
                     let r = lua.scope(|scope| {
                         let ctx = scope.create_userdata(Ctx { cpu, bus: &mut *bus, frame })?;
                         let f: Function = lua.registry_value(&key)?;
                         f.call::<Value>(ctx)
                     });
-                    // A hook may change which voices keep real time.
-                    bus.spu.realtime_voices = state.lock().unwrap().realtime_voices;
+                    // A hook may change which voices keep real time. Only this
+                    // mod's own voices change: the chip holds every mod's
+                    // (`ModRuntime::apply_speed`), and copying this mod's mask
+                    // over it let any other mod's hook drop Fast-Forward's
+                    // voices back to sped-up pitch until its next tick.
+                    let after = state.lock().unwrap().realtime_voices;
+                    if after != before {
+                        bus.spu.realtime_voices = (bus.spu.realtime_voices & !before) | after;
+                    }
                     match r {
                         Ok(Value::Boolean(true)) => HookAction::Redirect,
                         Ok(_) => HookAction::Continue,
@@ -754,6 +762,26 @@ mod tests {
         assert_eq!(host.installed.len(), 1);
         assert!(parse_pattern("1234567").is_none() && parse_pattern("1234567g").is_none() && parse_pattern("").is_none());
         assert_eq!(parse_pattern("0c?????? 0000b821"), Some(vec![(0x0C00_0000, 0xFF00_0000), (0x0000_B821, 0xFFFF_FFFF)]));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn hooks_keep_other_mods_realtime_voices() {
+        let d = std::env::temp_dir().join(format!("dwrc-voices-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        // Like Fast-Forward: a hook that keeps voices 0..3 at real time.
+        std::fs::write(d.join("ff.lua"), "dwrc.on_exec(0x80001000, function(ctx) dwrc.set_realtime_voices(0xF) end)").unwrap();
+        // Like any other mod: a hook that never touches the voices.
+        std::fs::write(d.join("other.lua"), "dwrc.on_exec(0x80002000, function(ctx) return false end)").unwrap();
+        let load = |f: &str| ScriptHost::load(f, dwrc_disc::GameId::Dw3, "SLES-03936", &d.join(f), Default::default(), d.join("data")).unwrap();
+        let (mut ff, mut other) = (load("ff.lua"), load("other.lua"));
+        let mut psx = dwrc_psx::Psx::new(&vec![0u8; 512 * 1024], dwrc_psx::VideoStandard::Pal);
+        ff.install_hooks(&mut psx.bus);
+        other.install_hooks(&mut psx.bus);
+        psx.bus.run_hook(&mut psx.cpu, 0x8000_1000);
+        assert_eq!(psx.bus.spu.realtime_voices, 0xF);
+        psx.bus.run_hook(&mut psx.cpu, 0x8000_2000);
+        assert_eq!(psx.bus.spu.realtime_voices, 0xF);
         let _ = std::fs::remove_dir_all(&d);
     }
 
