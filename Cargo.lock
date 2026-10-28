@@ -1143,7 +1143,7 @@ checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
 name = "dwrc"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "anyhow",
  "cpal",
@@ -1163,7 +1163,7 @@ dependencies = [
 
 [[package]]
 name = "dwrc-cli"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "anyhow",
  "dwrc-disc",
@@ -1180,7 +1180,7 @@ dependencies = [
 
 [[package]]
 name = "dwrc-disc"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "hex",
  "log",
@@ -1191,11 +1191,11 @@ dependencies = [
 
 [[package]]
 name = "dwrc-mips"
-version = "1.4.0"
+version = "1.5.0"
 
 [[package]]
 name = "dwrc-modhub"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "anyhow",
  "dwrc-disc",
@@ -1212,7 +1212,7 @@ dependencies = [
 
 [[package]]
 name = "dwrc-mods"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "anyhow",
  "dwrc-disc",
@@ -1232,7 +1232,7 @@ dependencies = [
 
 [[package]]
 name = "dwrc-psx"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "dwrc-disc",
  "dwrc-mips",
@@ -1242,7 +1242,7 @@ dependencies = [
 
 [[package]]
 name = "dwrc-recomp"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "cranelift-codegen",
  "cranelift-frontend",
@@ -1256,7 +1256,7 @@ dependencies = [
 
 [[package]]
 name = "dwrc-runtime"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "anyhow",
  "directories",
