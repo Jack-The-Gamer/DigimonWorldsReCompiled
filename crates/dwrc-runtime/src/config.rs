@@ -29,6 +29,22 @@ pub enum Aspect {
     Stretch,
 }
 
+/// Widescreen: the 3D scenes of the games that support it are drawn with a
+/// wider view and shown at this screen shape (see `widescreen`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum Widescreen {
+    /// The picture as the console drew it.
+    #[default]
+    #[serde(rename = "off")]
+    Off,
+    #[serde(rename = "16:9")]
+    W16x9,
+    #[serde(rename = "16:10")]
+    W16x10,
+    #[serde(rename = "21:9")]
+    W21x9,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum EngineKind {
@@ -48,6 +64,11 @@ pub enum EngineKind {
 pub struct VideoConfig {
     pub filter: Filter,
     pub aspect: Aspect,
+    /// A wider view in the games that support it.
+    pub widescreen: Widescreen,
+    /// With widescreen: menus and panels near the screen's edges move to the
+    /// edges of the wider picture (games with known UI only).
+    pub widescreen_ui: bool,
     pub show_fps: bool,
     pub start_fullscreen: bool,
     /// Settings for the CRT filter.
@@ -59,7 +80,7 @@ pub struct VideoConfig {
 
 impl Default for VideoConfig {
     fn default() -> Self {
-        Self { filter: Filter::Nearest, aspect: Aspect::Tv4x3, show_fps: false, start_fullscreen: false, crt: CrtConfig::default(), pal_60hz: true }
+        Self { filter: Filter::Nearest, aspect: Aspect::Tv4x3, widescreen: Widescreen::Off, widescreen_ui: false, show_fps: false, start_fullscreen: false, crt: CrtConfig::default(), pal_60hz: true }
     }
 }
 

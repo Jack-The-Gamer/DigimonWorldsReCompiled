@@ -107,6 +107,15 @@ struct Prim {
 }
 
 impl Gpu {
+    #[allow(clippy::too_many_arguments)]
+    fn trace_prim(&mut self, op: u32, x0: i32, x1: i32, y0: i32, y1: i32, clut: u32) {
+        let area = [self.draw_x1, self.draw_y1, self.draw_x2, self.draw_y2];
+        let (addr, tex) = (self.packet_addr, (clut & 0xFFFF) << 16 | (self.texpage & 0x1FF));
+        if let Some(t) = &mut self.trace {
+            t.push(super::TracedPrim { addr, op, x0, x1, y0, y1, area, tex, shift: None });
+        }
+    }
+
     fn decode_vertex(&self, w: u32) -> (i32, i32) {
         (sign_extend_11(w & 0x7FF), sign_extend_11((w >> 16) & 0x7FF))
     }
@@ -189,6 +198,44 @@ impl Gpu {
         self.draw_triangle([verts[0], verts[1], verts[2]], &prim);
         if quad {
             self.draw_triangle([verts[1], verts[2], verts[3]], &prim);
+        }
+        // Widescreen: again into the canvas beside the area (see `wide`).
+        let xmin = verts[..n].iter().map(|v| v.x).min().unwrap();
+        let xmax = verts[..n].iter().map(|v| v.x).max().unwrap();
+        let ymin = verts[..n].iter().map(|v| v.y).min().unwrap();
+        let ymax = verts[..n].iter().map(|v| v.y).max().unwrap();
+        if self.trace.is_some() {
+            self.trace_prim(op, xmin, xmax, ymin, ymax, clut);
+        }
+        // An untextured screen-aligned quad across the whole area is a screen
+        // layer (a backdrop, a fade): it goes across the strips too.
+        let layer = quad
+            && !textured
+            && xmin <= self.draw_x1
+            && xmax >= self.draw_x2
+            && verts.iter().filter(|v| v.x == xmin).count() == 2
+            && verts.iter().filter(|v| v.x == xmax).count() == 2;
+        let ui = self.is_ui(textured, shaded, layer, clut, (xmax - xmin + 1, ymax - ymin + 1));
+        if let Some(draws) = self.side_begin(if layer { self.draw_x1 - 1 } else { xmin }, xmax, ymin, ymax, ui, semi) {
+            if layer {
+                let (lo, hi) = self.side.as_ref().map(|s| (s.lo, s.hi)).unwrap();
+                for v in verts.iter_mut() {
+                    v.x = if v.x == xmin { v.x.min(lo) } else { v.x.max(hi + 1) };
+                }
+            }
+            let mut at = 0;
+            for (d, clip) in draws.into_iter().flatten() {
+                self.side_clip(clip);
+                for v in verts.iter_mut() {
+                    v.x += d - at;
+                }
+                at = d;
+                self.draw_triangle([verts[0], verts[1], verts[2]], &prim);
+                if quad {
+                    self.draw_triangle([verts[1], verts[2], verts[3]], &prim);
+                }
+            }
+            self.side_end();
         }
     }
 
@@ -310,8 +357,22 @@ impl Gpu {
         if self.skip_line(y) {
             return;
         }
-        let x0 = x_start.max(self.draw_x1);
-        let x1 = x_bound.min(self.draw_x2 + 1);
+        match &self.side {
+            None => self.span_run(y, x_start.max(self.draw_x1), x_bound.min(self.draw_x2 + 1), ig0, d, prim),
+            Some(s) if s.full => {
+                let (lo, hi) = (s.lo, s.hi);
+                self.span_run(y, x_start.max(lo), x_bound.min(hi + 1), ig0, d, prim);
+            }
+            Some(s) => {
+                let (lo, x1, x2, hi) = (s.lo, s.x1, s.x2, s.hi);
+                self.span_run(y, x_start.max(lo), x_bound.min(x1), ig0, d, prim);
+                self.span_run(y, x_start.max(x2 + 1), x_bound.min(hi + 1), ig0, d, prim);
+            }
+        }
+    }
+
+    #[inline]
+    fn span_run(&mut self, y: i32, x0: i32, x1: i32, ig0: &Group, d: &Deltas, prim: &Prim) {
         if x0 >= x1 {
             return;
         }
@@ -368,7 +429,11 @@ impl Gpu {
             pr | (pg << 5) | (pb << 10)
         };
         let semi = prim.semi && (!prim.textured || pix & 0x8000 != 0);
-        self.plot(x as usize & (VRAM_W - 1), y, pix, semi, prim.blend);
+        if self.side.is_some() {
+            self.plot_side(x, y, pix, semi, prim.blend);
+        } else {
+            self.plot(x as usize & (VRAM_W - 1), y, pix, semi, prim.blend);
+        }
     }
 
     #[inline(always)]
@@ -445,21 +510,50 @@ impl Gpu {
         let b = ((color >> 16) & 0xFF) as i32;
         let x0 = x + self.off_x;
         let y0 = y + self.off_y;
+        if self.trace.is_some() {
+            self.trace_prim(op, x0, x0 + w - 1, y0, y0 + h - 1, clut);
+        }
         let ys = y0.max(self.draw_y1);
         let ye = (y0 + h).min(self.draw_y2 + 1);
-        let xs = x0.max(self.draw_x1);
-        let xe = (x0 + w).min(self.draw_x2 + 1);
-        for py in ys..ye {
-            if self.skip_line(py) {
-                continue;
+        // `ox`: where the rectangle starts (moved, for Widescreen UI).
+        let pass = |gpu: &mut Self, xs: i32, xe: i32, ox: i32| {
+            for py in ys..ye {
+                if gpu.skip_line(py) {
+                    continue;
+                }
+                let dy = (py - y0) as u32;
+                let v = if gpu.rect_flip_y { v0.wrapping_sub(dy) } else { v0.wrapping_add(dy) } & 0xFF;
+                for px in xs..xe {
+                    let dx = (px - ox) as u32;
+                    let u = if gpu.rect_flip_x { u0.wrapping_sub(dx) } else { u0.wrapping_add(dx) } & 0xFF;
+                    gpu.shade_pixel(px, (py & 0x1FF) as usize, r, g, b, u, v, &prim);
+                }
             }
-            let dy = (py - y0) as u32;
-            let v = if self.rect_flip_y { v0.wrapping_sub(dy) } else { v0.wrapping_add(dy) } & 0xFF;
-            for px in xs..xe {
-                let dx = (px - x0) as u32;
-                let u = if self.rect_flip_x { u0.wrapping_sub(dx) } else { u0.wrapping_add(dx) } & 0xFF;
-                self.shade_pixel(px, (py & 0x1FF) as usize, r, g, b, u, v, &prim);
+        };
+        pass(self, x0.max(self.draw_x1), (x0 + w).min(self.draw_x2 + 1), x0);
+        // Widescreen: again into the canvas beside the area (see `wide`).
+        // An untextured rectangle across the whole area is a screen layer (a
+        // backdrop, a fade): it goes across the strips too.
+        let layer = !textured && x0 <= self.draw_x1 && x0 + w - 1 >= self.draw_x2;
+        let ui = self.is_ui(textured, false, layer, clut, (w, h));
+        if w <= 0 {
+            return;
+        }
+        if let Some(draws) = self.side_begin(if layer { self.draw_x1 - 1 } else { x0 }, x0 + w - 1, y0, y0 + h - 1, ui, semi) {
+            for (d, clip) in draws.into_iter().flatten() {
+                self.side_clip(clip);
+                let (lo, x1, x2, hi, full) = self.side.as_ref().map(|s| (s.lo, s.x1, s.x2, s.hi, s.full)).unwrap();
+                let x0 = x0 + d;
+                if layer {
+                    pass(self, lo, hi + 1, x0);
+                } else if full {
+                    pass(self, x0.max(lo), (x0 + w).min(hi + 1), x0);
+                } else {
+                    pass(self, x0.max(lo), (x0 + w).min(x1), x0);
+                    pass(self, x0.max(x2 + 1), (x0 + w).min(hi + 1), x0);
+                }
             }
+            self.side_end();
         }
     }
 
@@ -490,6 +584,31 @@ impl Gpu {
         if dx >= 1024 || dy >= 512 {
             return;
         }
+        if self.trace.is_some() {
+            self.trace_prim(0x40, x0.min(x1), x0.max(x1), y0.min(y1), y0.max(y1), 0);
+        }
+        self.line_pass(x0, y0, x1, y1, c0, c1, shaded, semi);
+        // Widescreen: again into the side strips, when it reaches past the area.
+        // Lines are never UI (games outline things in the scene with them).
+        let ui = false;
+        if let Some(draws) = self.side_begin(x0.min(x1), x0.max(x1), y0.min(y1), y0.max(y1), ui, semi) {
+            for (d, clip) in draws.into_iter().flatten() {
+                self.side_clip(clip);
+                self.line_pass(x0 + d, y0, x1 + d, y1, c0, c1, shaded, semi);
+            }
+            self.side_end();
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn line_pass(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, c0: u32, c1: u32, shaded: bool, semi: bool) {
+        let dx = (x1 - x0).abs();
+        let dy = (y1 - y0).abs();
+        let (lo, hi, sx1, sx2) = match &self.side {
+            Some(s) if s.full => (s.lo, s.hi, i32::MAX, i32::MIN),
+            Some(s) => (s.lo, s.hi, s.x1, s.x2),
+            None => (self.draw_x1, self.draw_x2, i32::MAX, i32::MIN),
+        };
         let dither = shaded && self.texpage & (1 << 9) != 0;
         let blend = (self.texpage >> 5) & 3;
         let col = |c: u32| ((c & 0xFF) as i32, ((c >> 8) & 0xFF) as i32, ((c >> 16) & 0xFF) as i32);
@@ -528,13 +647,18 @@ impl Gpu {
         for _ in 0..=k {
             let px = sign_extend_11(((cx >> 32) as u32) & 0x7FF);
             let py = sign_extend_11(((cy >> 32) as u32) & 0x7FF);
-            if px >= self.draw_x1 && px <= self.draw_x2 && py >= self.draw_y1 && py <= self.draw_y2 && !self.skip_line(py) {
+            // In the side pass, only the strips: outside sx1..=sx2.
+            if px >= lo && px <= hi && !(px >= sx1 && px <= sx2) && py >= self.draw_y1 && py <= self.draw_y2 && !self.skip_line(py) {
                 let yy = (py & 0x1FF) as usize;
                 let pr = Self::dither_c(r >> 12, px, yy, dither);
                 let pg = Self::dither_c(g >> 12, px, yy, dither);
                 let pb = Self::dither_c(b >> 12, px, yy, dither);
                 let pix = pr | (pg << 5) | (pb << 10);
-                self.plot(px as usize & (VRAM_W - 1), yy, pix, semi, blend);
+                if self.side.is_some() {
+                    self.plot_side(px, yy, pix, semi, blend);
+                } else {
+                    self.plot(px as usize & (VRAM_W - 1), yy, pix, semi, blend);
+                }
             }
             cx += step_x;
             cy += step_y;

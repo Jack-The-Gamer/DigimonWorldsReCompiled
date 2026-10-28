@@ -30,6 +30,7 @@ Build with `cargo build --release -p dwrc-cli`; the tool is `target/release/dwrc
 | `--tty` | echo the BIOS/game debug console |
 | `--card1 FILE.mcd` / `--card2` | use (and afterwards save, also after `--serve`) memory card images |
 | `--pal60` | run Digimon World 2003 (Europe) in its own 60 Hz mode, as the launcher does by default |
+| `--widescreen 16:9\|16:10\|21:9` | widescreen side strips (pictures from `--shots` and `shot` come out wider, e.g. 426×240); add `--widescreen-ui` for Widescreen UI |
 | `--states DIR` | where save states go (made by mods or the `--serve` commands); default: a folder in the temp directory |
 | `--trace-bios` | list the BIOS functions the game calls (table, number, count, first frame), also after `--serve`: run the same commands with and without the action you are curious about (saving, say) and compare |
 | `--dump-entry` | print the hardware state when the game's entry point is reached |
@@ -53,6 +54,8 @@ frame number, and `--mod` folders run as usual.
 | `poke8` / `poke16` / `poke32 ADDR VALUE` | write memory |
 | `key [shift+\|ctrl+\|alt+]KEY` | a key press for mods (`dwrc.on_key`), e.g. `key shift+1` |
 | `savestate N` / `loadstate N` | save the console to slot N, or load it |
+| `widescreen off\|16:9\|16:10\|21:9 [ui]` | switch the widescreen side strips, with `ui` Widescreen UI (it stays across `loadstate`; the picture fills from the next frames drawn) |
+| `gpulog N FILE` | run N frames and write every primitive drawn: frame, DMA packet address, GP0 command, x0 x1 y0 y1 in VRAM, drawing area, CLUT<<16\|texture page, widescreen move (`-`: none); copies as command `80` with the source in the texture field; a `display X Y` line per frame. Watch a packet address to find the code that builds it; group by texture page and CLUT row to tell a game's UI from its scenery |
 | `pcs N [LO HI]` | run N frames and list the 40 addresses where the CPU spent most time (sampled every 57 cycles), optionally only between `LO` and `HI`: a quick way to find the code behind what's on screen |
 | `prof N [MS] [BTN[+BTN…]]` | run N frames (holding the buttons) and time each on the host: the average, the worst, and every frame slower than `MS` (default 12), with the time spent translating code on the emulation thread in it (only with `recomp-inline` or `validate`; `recomp` translates in the background) |
 | `cd` | what the CD-ROM drive is doing: position, mode (double speed, XA-ADPCM, filter), idle/seeking/reading/playing, the XA filter and how many XA-ADPCM samples it has decoded (to tell streamed music from sequenced music) |

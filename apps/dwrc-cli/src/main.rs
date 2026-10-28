@@ -35,7 +35,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         _ => bail!(
-            "commands:\n  inspect <cue>\n  extract <cue> <path> <out>\n  run <bin|cue> [--bios <bin>] [--frames N] [--shots dir] [--every K] [--fast] [--input frame:button:len,...] [--mod <folder>]... [--card1 F.mcd] [--pal60] [--states DIR] [--trace-bios] [--dump-ram F] [--serve]\n  disasm <exe> <addr> <count>\n  mod validate <folder>              check a mod folder\n  mod pack <folder> [--out <dir>]    build <id>-<version>.zip for a GitHub release\n  mod install <zip> [--data <dir>] [--replace]\n  mod list [--data <dir>]\n  mod index <owner/repo | URL>       read a mod index feed\n  mod releases <owner/repo> <id>     list a mod's installable GitHub releases"
+            "commands:\n  inspect <cue>\n  extract <cue> <path> <out>\n  run <bin|cue> [--bios <bin>] [--frames N] [--shots dir] [--every K] [--fast] [--input frame:button:len,...] [--mod <folder>]... [--card1 F.mcd] [--pal60] [--widescreen 16:9|16:10|21:9 [--widescreen-ui]] [--states DIR] [--trace-bios] [--dump-ram F] [--serve]\n  disasm <exe> <addr> <count>\n  mod validate <folder>              check a mod folder\n  mod pack <folder> [--out <dir>]    build <id>-<version>.zip for a GitHub release\n  mod install <zip> [--data <dir>] [--replace]\n  mod list [--data <dir>]\n  mod index <owner/repo | URL>       read a mod index feed\n  mod releases <owner/repo> <id>     list a mod's installable GitHub releases"
         ),
     }
 }
@@ -153,6 +153,13 @@ fn run(args: &[String]) -> Result<()> {
             println!("60 Hz: this release has no 60 Hz mode to switch on");
         }
     }
+    // --widescreen 16:9: side strips beside the picture (frames come out wider).
+    if let Some(w) = opt(args, "--widescreen") {
+        let w = dwrc_runtime::config::Widescreen::parse(w).context("--widescreen takes off, 16:9, 16:10 or 21:9")?;
+        let ui = flag(args, "--widescreen-ui");
+        dwrc_runtime::widescreen::apply(&mut psx, ident.game, w, ui);
+        println!("widescreen: {}{}", w.label(), if ui { " with Widescreen UI" } else { "" });
+    }
     match opt(args, "--engine").unwrap_or("interp") {
         "recomp" => psx.set_engine(dwrc_recomp::new_engine(dwrc_recomp::Mode::Native)),
         "validate" => psx.set_engine(dwrc_recomp::new_engine(dwrc_recomp::Mode::Validate)),
@@ -226,7 +233,7 @@ fn run(args: &[String]) -> Result<()> {
         std::fs::create_dir_all(d)?;
     }
     if flag(args, "--serve") {
-        serve(&mut psx, &mut mod_rt, &script, &states)?;
+        serve(&mut psx, &mut mod_rt, &script, &states, ident.game)?;
         for (slot, path) in &card_paths {
             if let Some(c) = &psx.bus.sio.cards[*slot] {
                 std::fs::write(path, &c.data)?;
@@ -271,8 +278,14 @@ fn run(args: &[String]) -> Result<()> {
         if let Some(dir) = &shots {
             if f % every == 0 {
                 let (w, h) = psx.bus.gpu.render_display(&mut buf);
+                // Mods' images go on the console's picture (inside any widescreen
+                // strips; with Widescreen UI, those near an edge follow it out).
+                let inner = psx.bus.gpu.latched.width.min(w);
+                let ui = psx.bus.gpu.widescreen_ui().is_some();
                 for o in mod_rt.overlays() {
-                    o.paint(&mut buf, w, h);
+                    let m = (w - inner) / 2;
+                    let left = if ui { (m as i32 + o.edge() * m as i32) as u32 } else { m };
+                    o.paint_within(&mut buf, w, h, left, inner);
                 }
                 save_png(&dir.join(format!("frame_{f:06}.png")), w, h, &buf)?;
             }
@@ -361,7 +374,7 @@ fn run(args: &[String]) -> Result<()> {
 /// ```
 /// Every command answers with a line starting `ok` or `err`; messages from
 /// mods and save states follow it after ` | `.
-fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button, u64)], states: &dwrc_runtime::savestate::StateStore) -> Result<()> {
+fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button, u64)], states: &dwrc_runtime::savestate::StateStore, game: dwrc_disc::GameId) -> Result<()> {
     use std::io::{BufRead, Write};
     let num = |s: &str| -> Result<u32> {
         let s = s.trim();
@@ -435,6 +448,25 @@ fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button
                 }
                 Ok(format!("frame {frame}"))
             }
+            ["gpulog", n, path] => {
+                // Every primitive drawn over N frames: frame, packet address, GP0 command,
+                // x0 x1 y0 y1 (VRAM coordinates), drawing area x1 y1 x2 y2, CLUT<<16|texpage,
+                // widescreen shift of the second pass ("-": none).
+                use std::fmt::Write as _;
+                let mut out = String::new();
+                for _ in 0..num(n)? {
+                    psx.bus.gpu.trace = Some(Vec::new());
+                    step(psx, mods, &[], &mut frame, &mut notes);
+                    let _ = writeln!(out, "{frame} display {} {}", psx.bus.gpu.display_x, psx.bus.gpu.display_y);
+                    for p in psx.bus.gpu.trace.take().unwrap_or_default() {
+                        let a = p.area;
+                        let shift = p.shift.map_or("-".to_string(), |d| d.to_string());
+                        let _ = writeln!(out, "{frame} {:08x} {:02x} {} {} {} {} {} {} {} {} {:08x} {shift}", p.addr, p.op, p.x0, p.x1, p.y0, p.y1, a[0], a[1], a[2], a[3], p.tex);
+                    }
+                }
+                std::fs::write(path, out)?;
+                Ok(format!("frame {frame}"))
+            }
             ["key", spec] => {
                 let parts: Vec<&str> = spec.split('+').collect();
                 let (key, held) = parts.split_last().context("key name")?;
@@ -448,6 +480,12 @@ fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button
                 states.save(psx, num(n)?)?;
                 Ok(format!("saved slot {n} at frame {frame}"))
             }
+            ["widescreen", w, rest @ ..] => {
+                let w = dwrc_runtime::config::Widescreen::parse(w).ok_or_else(|| anyhow::anyhow!("widescreen takes off, 16:9, 16:10 or 21:9 [ui]"))?;
+                let ui = rest.first() == Some(&"ui");
+                dwrc_runtime::widescreen::apply(psx, game, w, ui);
+                Ok(format!("widescreen {}{}", w.label(), if ui { " with Widescreen UI" } else { "" }))
+            }
             ["loadstate", n] => {
                 states.load(psx, num(n)?)?;
                 Ok(format!("loaded slot {n}"))
@@ -455,8 +493,12 @@ fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button
             ["shot", path] => {
                 let mut buf = Vec::new();
                 let (wd, ht) = psx.bus.gpu.render_display(&mut buf);
+                let inner = psx.bus.gpu.latched.width.min(wd);
+                let ui = psx.bus.gpu.widescreen_ui().is_some();
                 for o in mods.overlays() {
-                    o.paint(&mut buf, wd, ht);
+                    let m = (wd - inner) / 2;
+                    let left = if ui { (m as i32 + o.edge() * m as i32) as u32 } else { m };
+                    o.paint_within(&mut buf, wd, ht, left, inner);
                 }
                 save_png(Path::new(path), wd, ht, &buf)?;
                 Ok(format!("{path} {wd}x{ht}"))

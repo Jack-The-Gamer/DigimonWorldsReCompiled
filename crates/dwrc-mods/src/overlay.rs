@@ -77,13 +77,32 @@ impl Overlay {
         [left, top, w, h]
     }
 
+    /// Which edge of the grid the image sits against, for widescreen with
+    /// Widescreen UI (where it follows that edge out, like the game's UI):
+    /// -1 left, 1 right, 0 neither (or both).
+    pub fn edge(&self) -> i32 {
+        const EDGE: f32 = 24.0;
+        let [l, _, w, _] = self.rect();
+        match (l <= EDGE, l + w >= GRID_W - EDGE) {
+            (true, false) => -1,
+            (false, true) => 1,
+            _ => 0,
+        }
+    }
+
     /// Paints the image (nearest neighbour, alpha blended) onto a picture of
     /// `0xAARRGGBB` pixels (the alpha byte is kept).
     pub fn paint(&self, pixels: &mut [u32], width: u32, height: u32) {
+        self.paint_within(pixels, width, height, 0, width);
+    }
+
+    /// Paints the image on the grid laid over columns `left..left + inner`
+    /// of the frame (the console's picture inside a widescreen frame).
+    pub fn paint_within(&self, pixels: &mut [u32], width: u32, height: u32, left: u32, inner: u32) {
         let [l, t, w, h] = self.rect();
-        let (sx, sy) = (width as f32 / GRID_W, height as f32 / GRID_H);
-        let (x0, y0) = ((l * sx).round() as i64, (t * sy).round() as i64);
-        let (x1, y1) = (((l + w) * sx).round() as i64, ((t + h) * sy).round() as i64);
+        let (sx, sy) = (inner as f32 / GRID_W, height as f32 / GRID_H);
+        let (x0, y0) = ((l * sx).round() as i64 + left as i64, (t * sy).round() as i64);
+        let (x1, y1) = (((l + w) * sx).round() as i64 + left as i64, ((t + h) * sy).round() as i64);
         let img = &self.image;
         for y in y0.max(0)..y1.min(height as i64) {
             let iy = (((y - y0) as f32 + 0.5) / (y1 - y0) as f32 * img.height as f32) as u32;

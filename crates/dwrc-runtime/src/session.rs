@@ -1,7 +1,7 @@
 //! A play session: one game running on the PS1 core with its BIOS, disc,
 //! memory cards, mods and execution engine.
 
-use crate::config::{Config, EngineKind};
+use crate::config::{Config, EngineKind, Widescreen};
 use crate::library::{BiosChoice, DiscStatus, Library};
 use crate::paths::Paths;
 use crate::savestate::StateStore;
@@ -33,6 +33,10 @@ pub struct Session {
     pub bios_name: String,
     /// A PAL release running in its own 60 Hz mode (see `pal60`).
     pub sixty_hz: bool,
+    /// The widescreen shape in use (Off for a game without widescreen).
+    widescreen: Widescreen,
+    /// Widescreen UI switched on (it acts only with widescreen on).
+    widescreen_ui: bool,
     /// This release's save states (used by mods through `dwrc.save_state`).
     states: StateStore,
     /// Messages for the screen (from mods and save states).
@@ -121,12 +125,15 @@ impl Session {
             EngineKind::Validate => psx.set_engine(dwrc_recomp::new_engine(dwrc_recomp::Mode::Validate)),
         }
         mod_rt.install(&mut psx);
+        let widescreen = if crate::widescreen::supported(game) { cfg.video.widescreen } else { Widescreen::Off };
+        crate::widescreen::apply(&mut psx, game, widescreen, cfg.video.widescreen_ui);
         log::info!(
-            "starting {} ({}) with the {} engine and the {bios_name} BIOS{}",
+            "starting {} ({}) with the {} engine and the {bios_name} BIOS{}{}",
             ident.title,
             ident.serial,
             psx.engine_name(),
-            if sixty_hz { ", in its 60 Hz mode" } else { "" }
+            if sixty_hz { ", in its 60 Hz mode" } else { "" },
+            if widescreen != Widescreen::Off { format!(", widescreen {}", widescreen.label()) } else { String::new() }
         );
         Ok(Self {
             game,
@@ -142,6 +149,8 @@ impl Session {
             engine,
             bios_name,
             sixty_hz,
+            widescreen,
+            widescreen_ui: cfg.video.widescreen_ui,
             states,
             notices: Vec::new(),
             overlays: None,
@@ -218,6 +227,24 @@ impl Session {
 
     pub fn take_audio(&mut self, out: &mut Vec<i16>) {
         self.psx.bus.spu.take_output(out);
+    }
+
+    /// Changes the widescreen shape (ignored by a game without widescreen)
+    /// and Widescreen UI.
+    pub fn set_widescreen(&mut self, w: Widescreen, ui: bool) {
+        self.widescreen = if crate::widescreen::supported(self.game) { w } else { Widescreen::Off };
+        self.widescreen_ui = ui;
+        crate::widescreen::apply(&mut self.psx, self.game, self.widescreen, ui);
+    }
+
+    /// How much wider than 4:3 the picture is to be shown (1.0: 4:3).
+    pub fn picture_stretch(&self) -> f32 {
+        self.widescreen.stretch()
+    }
+
+    /// Whether Widescreen UI is moving the game's UI (widescreen on too).
+    pub fn ui_moved(&self) -> bool {
+        self.widescreen_ui && self.widescreen != Widescreen::Off
     }
 
     pub fn is_pal(&self) -> bool {

@@ -2,6 +2,10 @@
 //! Drawing primitives live in [`raster`].
 
 mod raster;
+mod wide;
+
+pub use wide::margin as widescreen_margin;
+pub use wide::UiRules;
 
 use crate::irq::{Interrupt, Irq};
 use crate::timers::TimerGpuInfo;
@@ -99,6 +103,36 @@ pub struct Gpu {
     pub frames: u64,
     /// Display parameters latched at the start of vblank (what was shown).
     pub latched: DisplayInfo,
+    /// Widescreen side strips (host state, not part of the console or of
+    /// save states; see `wide`).
+    wide: Option<Box<wide::Wide>>,
+    /// The second, side-strip pass of the primitive being drawn.
+    side: Option<wide::Side>,
+    /// Widescreen UI rules set while widescreen is off (used when it comes on).
+    pending_ui: Option<wide::UiRules>,
+    /// Development: every primitive drawn while `Some` (see `TracedPrim`).
+    pub trace: Option<Vec<TracedPrim>>,
+    /// Development: RAM address of the linked-list packet being fed (0 otherwise).
+    pub packet_addr: u32,
+}
+
+/// A primitive as drawn (development tracing, `dwrc-cli --serve gpulog`).
+#[derive(Debug, Clone, Copy)]
+pub struct TracedPrim {
+    /// RAM address of the DMA linked-list packet it came in (0: not by linked list).
+    pub addr: u32,
+    pub op: u32,
+    /// Bounds in VRAM coordinates (drawing offset applied).
+    pub x0: i32,
+    pub x1: i32,
+    pub y0: i32,
+    pub y1: i32,
+    /// The drawing area.
+    pub area: [i32; 4],
+    /// CLUT (high half) and texture page bits (low 9 bits).
+    pub tex: u32,
+    /// Widescreen: how far the second pass moved it (`None`: no second pass).
+    pub shift: Option<i32>,
 }
 
 const DITHER: [[i32; 4]; 4] = [[-4, 0, -3, 1], [2, -2, 3, -1], [-3, 1, -4, 0], [3, -1, 2, -2]];
@@ -151,6 +185,11 @@ impl Gpu {
             hblank_count: 0,
             frames: 0,
             latched: DisplayInfo { x: 0, y: 0, width: 320, height: 240, bpp24: false, interlaced: false, enabled: false, pal: false },
+            wide: None,
+            side: None,
+            pending_ui: None,
+            trace: None,
+            packet_addr: 0,
         };
         g.set_standard(standard);
         g.soft_reset();
@@ -261,6 +300,7 @@ impl Gpu {
                 self.in_vblank = true;
                 irq.raise(Interrupt::VBlank);
                 self.latched = self.display_info();
+                self.wide_vblank();
                 self.frames += 1;
                 frame_done = true;
             } else if self.line == vb_end {
@@ -369,8 +409,12 @@ impl Gpu {
             0x03 => self.display_disabled = v & 1 != 0,
             0x04 => self.dma_dir = v & 3,
             0x05 => {
-                self.display_x = v & 0x3FE;
-                self.display_y = (v >> 10) & 0x1FF;
+                let (x, y) = (v & 0x3FE, (v >> 10) & 0x1FF);
+                if (x, y) != (self.display_x, self.display_y) {
+                    self.wide_display_moved(x, y);
+                }
+                self.display_x = x;
+                self.display_y = y;
             }
             0x06 => {
                 self.h_start = v & 0xFFF;
@@ -502,6 +546,7 @@ impl Gpu {
                 let y = (self.cmd[1] >> 16) & 0x1FF;
                 let w = ((self.cmd[2] & 0xFFFF).wrapping_sub(1) & 0x3FF) + 1;
                 let h = (((self.cmd[2] >> 16) & 0xFFFF).wrapping_sub(1) & 0x1FF) + 1;
+                self.wide_write(x, y, w, h);
                 self.state = Gp0State::Upload { x, y, w, h, pos: 0 };
             }
             0xC0..=0xDF => {
@@ -606,7 +651,12 @@ impl Gpu {
             }
             pos += 1;
         }
-        self.state = if pos >= total { Gp0State::Command } else { Gp0State::Upload { x, y, w, h, pos } };
+        self.state = if pos >= total {
+            self.wide_written(x, y, w, h, None);
+            Gp0State::Command
+        } else {
+            Gp0State::Upload { x, y, w, h, pos }
+        };
     }
 
     fn fill_rect(&mut self) {
@@ -626,6 +676,7 @@ impl Gpu {
                 self.vram[y as usize * VRAM_W + x] = color;
             }
         }
+        self.wide_fill(x0, y0, w, h, color);
     }
 
     fn copy_vram(&mut self) {
@@ -635,6 +686,12 @@ impl Gpu {
         let dy = (self.cmd[2] >> 16) & 0x1FF;
         let w = ((self.cmd[3] & 0xFFFF).wrapping_sub(1) & 0x3FF) + 1;
         let h = (((self.cmd[3] >> 16) & 0xFFFF).wrapping_sub(1) & 0x1FF) + 1;
+        // A copy onto itself changes no picture (Digimon World 1 copies a
+        // column onto itself every frame).
+        let moves = (sx, sy) != (dx, dy);
+        if moves {
+            self.wide_write(dx, dy, w, h);
+        }
         let mut line = vec![0u16; w as usize];
         for y in 0..h {
             let srow = ((sy + y) & 0x1FF) as usize * VRAM_W;
@@ -649,6 +706,15 @@ impl Gpu {
                 }
                 self.vram[idx] = line[x as usize] | ((self.mask_set as u16) << 15);
             }
+        }
+        if moves {
+            self.wide_written(dx, dy, w, h, Some((sx, sy)));
+        }
+        if let Some(t) = &mut self.trace {
+            // Copies too: dest box, source in `tex`.
+            let area = [self.draw_x1, self.draw_y1, self.draw_x2, self.draw_y2];
+            let (x0, y0) = (dx as i32, dy as i32);
+            t.push(TracedPrim { addr: self.packet_addr, op: 0x80, x0, x1: x0 + w as i32 - 1, y0, y1: y0 + h as i32 - 1, area, tex: sy << 16 | sx, shift: None });
         }
     }
 
@@ -686,18 +752,41 @@ impl Gpu {
         }
     }
 
-    /// Renders the latched display area as 0xAARRGGBB pixels.
+    /// Renders the latched display area as 0xAARRGGBB pixels. With
+    /// widescreen on, the picture is wider by the side strips (black where
+    /// there is nothing to show).
     pub fn render_display(&self, out: &mut Vec<u32>) -> (u32, u32) {
         let d = self.latched;
+        let m = self.widescreen().map_or(0, |(num, den)| wide::margin(d.width, num, den));
+        let full = d.width + 2 * m;
         out.clear();
-        out.resize((d.width * d.height) as usize, 0xFF00_0000);
+        out.resize((full * d.height) as usize, 0xFF00_0000);
         if !d.enabled {
-            return (d.width, d.height);
+            return (full, d.height);
         }
+        let sides = if m > 0 && !d.bpp24 { self.wide_row(d.x, d.y, d.width, m) } else { None };
         for row in 0..d.height {
             let vy = ((d.y + row) & 0x1FF) as usize;
             let line = &self.vram[vy * VRAM_W..vy * VRAM_W + VRAM_W];
-            let o = &mut out[(row * d.width) as usize..((row + 1) * d.width) as usize];
+            let o = &mut out[(row * full) as usize..((row + 1) * full) as usize];
+            if let Some((whole, f)) = &sides {
+                let cl = f(row);
+                if *whole && cl.len() == o.len() {
+                    // Widescreen UI: the whole row is the canvas's.
+                    for (px, &c) in o.iter_mut().zip(cl) {
+                        *px = rgb15_to_argb(c);
+                    }
+                    continue;
+                }
+                let (mm, w) = (m as usize, d.width as usize);
+                for (px, &c) in o[..mm].iter_mut().zip(cl.get(..mm).unwrap_or(&[])) {
+                    *px = rgb15_to_argb(c);
+                }
+                for (px, &c) in o[mm + w..].iter_mut().zip(cl.get(mm + w..).unwrap_or(&[])) {
+                    *px = rgb15_to_argb(c);
+                }
+            }
+            let o = &mut o[m as usize..(m + d.width) as usize];
             if d.bpp24 {
                 let base = (d.x as usize) * 2;
                 for (col, px) in o.iter_mut().enumerate() {
@@ -720,7 +809,7 @@ impl Gpu {
                 }
             }
         }
-        (d.width, d.height)
+        (full, d.height)
     }
 }
 

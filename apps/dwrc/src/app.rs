@@ -7,7 +7,7 @@ use dwrc_disc::GameId;
 use crate::mods_page::{ModsUi, Tab};
 use dwrc_psx::Button;
 use dwrc_runtime::bios::region_label;
-use dwrc_runtime::config::{Aspect, BiosMode, EngineKind, Filter};
+use dwrc_runtime::config::{Aspect, BiosMode, EngineKind, Filter, Widescreen};
 use dwrc_runtime::library::GameEntry;
 use dwrc_runtime::{Config, DiscStatus, Library, Paths};
 use eframe::egui::{self, Align, Align2, Color32, Key, Layout, RichText, Sense, Stroke, TextureHandle, TextureOptions, Vec2};
@@ -184,12 +184,16 @@ impl App {
         if let Some(mut emu) = self.emu.take() {
             // Keep the last frame as the library thumbnail.
             let g = emu.game;
+            let stretch = emu.shared.status.lock().unwrap().stretch;
             {
                 let f = emu.shared.frame.lock().unwrap();
                 if f.width > 0 {
                     let dir = self.paths.cache_dir(g);
                     let _ = std::fs::create_dir_all(&dir);
-                    let _ = save_png(&dir.join("thumbnail.png"), f.width, f.height, &f.pixels);
+                    // The card shows 4:3: a widescreen picture's middle.
+                    let keep = (f.width as f32 / stretch.max(1.0)).round() as u32;
+                    let px = dwrc_runtime::widescreen::crop_middle(&f.pixels, f.width, f.height, keep);
+                    let _ = save_png(&dir.join("thumbnail.png"), keep.min(f.width), f.height, &px);
                 }
             }
             emu.stop();
@@ -682,6 +686,35 @@ impl App {
                         changed |= ui.radio_value(&mut self.cfg.video.aspect, Aspect::IntegerScale, "Integer scale").changed();
                         changed |= ui.radio_value(&mut self.cfg.video.aspect, Aspect::Stretch, "Stretch").changed();
                     });
+                    let before = (self.cfg.video.widescreen, self.cfg.video.widescreen_ui);
+                    ui.horizontal(|ui| {
+                        ui.label("Widescreen").on_hover_text(
+                            "Draws more of the picture at the sides: the parts of the 3D scenes the console cuts off at the edge of its 4:3 screen. Nothing is stretched.",
+                        );
+                        for w in Widescreen::ALL {
+                            ui.radio_value(&mut self.cfg.video.widescreen, w, w.label());
+                        }
+                    });
+                    if self.cfg.video.widescreen != Widescreen::Off {
+                        ui.checkbox(&mut self.cfg.video.widescreen_ui, "Widescreen UI").on_hover_text(
+                            "Menus, panels and HUD near the left or right edge of the screen move out to the edges of the wider picture, as a game made for widescreen would place them (with mods' pictures near an edge). Everything else stays where the game puts it.",
+                        );
+                    }
+                    if (self.cfg.video.widescreen, self.cfg.video.widescreen_ui) != before {
+                        changed = true;
+                        if let Some(e) = &self.emu {
+                            e.send(EmuCmd::Widescreen(self.cfg.video.widescreen, self.cfg.video.widescreen_ui));
+                        }
+                    }
+                    if self.cfg.video.widescreen != Widescreen::Off {
+                        ui.label(
+                            RichText::new(
+                                "The sides show what the game drew past the edge of the screen. Where it drew nothing there (menus, movies, pre-drawn screens, things a PlayStation would not show), they stay black.",
+                            )
+                            .color(MUTED)
+                            .small(),
+                        );
+                    }
                     changed |= ui.checkbox(&mut self.cfg.video.show_fps, "Show frame rate").changed();
                     changed |= ui.checkbox(&mut self.cfg.video.start_fullscreen, "Start in fullscreen (F11 toggles)").changed();
                     changed |= ui
@@ -980,11 +1013,14 @@ impl App {
             let mut image_rects = Vec::new();
             if let Some(t) = &self.game_tex {
                 let (w, h) = (self.game_size.0 as f32, self.game_size.1 as f32);
+                // A widescreen picture is this much wider than 4:3 (the
+                // frame itself is wider, with the console's pixel shape).
+                let wide = status.stretch.max(1.0);
                 let size = match self.cfg.video.aspect {
                     Aspect::Stretch => avail.size(),
                     Aspect::Tv4x3 => {
-                        let s = (avail.width() / 4.0).min(avail.height() / 3.0);
-                        Vec2::new(s * 4.0, s * 3.0)
+                        let s = (avail.width() / (4.0 * wide)).min(avail.height() / 3.0);
+                        Vec2::new(s * 4.0 * wide, s * 3.0)
                     }
                     Aspect::IntegerScale => {
                         let k = (avail.width() / w).min(avail.height() / h).floor().max(1.0);
@@ -1004,11 +1040,16 @@ impl App {
                         ui.painter().image(t.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
                     }
                 }
-                // Mods' images, on a 320×240 grid over the picture.
-                let (sx, sy) = (rect.width() / dwrc_mods::overlay::GRID_W, rect.height() / dwrc_mods::overlay::GRID_H);
+                // Mods' images, on a 320×240 grid over the console's picture
+                // (between any widescreen strips).
+                let inner = egui::Rect::from_center_size(rect.center(), Vec2::new(rect.width() / wide, rect.height()));
+                let (sx, sy) = (inner.width() / dwrc_mods::overlay::GRID_W, inner.height() / dwrc_mods::overlay::GRID_H);
+                // With Widescreen UI, images near an edge follow it out.
+                let side = (rect.width() - inner.width()) / 2.0;
                 for (o, tex) in &self.overlays {
                     let [l, t, w, h] = o.rect();
-                    let r = egui::Rect::from_min_size(rect.min + Vec2::new(l * sx, t * sy), Vec2::new(w * sx, h * sy));
+                    let out = if status.ui_moved { o.edge() as f32 * side } else { 0.0 };
+                    let r = egui::Rect::from_min_size(inner.min + Vec2::new(l * sx + out, t * sy), Vec2::new(w * sx, h * sy));
                     image_rects.push(r);
                     ui.painter().with_clip_rect(rect).image(tex.id(), r, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
                 }

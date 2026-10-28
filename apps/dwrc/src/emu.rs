@@ -6,6 +6,7 @@ use dwrc_disc::GameId;
 use dwrc_mods::overlay::Overlay;
 use dwrc_mods::EnabledMod;
 use dwrc_psx::PadState;
+use dwrc_runtime::config::Widescreen;
 use dwrc_runtime::{Config, Library, Paths, Session};
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -34,6 +35,10 @@ pub struct EmuStatus {
     pub bios: String,
     /// Speed a mod has set (Fast-Forward): 1 = real time.
     pub mod_speed: u32,
+    /// How much wider than 4:3 to show the picture (widescreen; 1.0 = 4:3).
+    pub stretch: f32,
+    /// Widescreen UI is moving the game's UI (mods' images near an edge follow).
+    pub ui_moved: bool,
 }
 
 pub struct Shared {
@@ -53,6 +58,8 @@ pub enum EmuCmd {
     Reset,
     /// A key pressed on the keyboard, for mods (`dwrc.on_key`).
     Key { key: String, shift: bool, ctrl: bool, alt: bool },
+    /// The widescreen settings changed (shape, Widescreen UI).
+    Widescreen(Widescreen, bool),
 }
 
 pub struct EmuHandle {
@@ -131,6 +138,8 @@ fn run(
         st.title = session.ident.title.clone();
         st.mod_log = session.mods.log.clone();
         st.bios = session.bios_name.clone();
+        st.stretch = session.picture_stretch();
+        st.ui_moved = session.ui_moved();
     }
     audio.clear();
     let mut pixels = Vec::new();
@@ -149,6 +158,12 @@ fn run(
                     audio.clear();
                 }
                 EmuCmd::Key { key, shift, ctrl, alt } => session.key(&key, shift, ctrl, alt),
+                EmuCmd::Widescreen(w, ui) => {
+                    session.set_widescreen(w, ui);
+                    let mut st = sh.status.lock().unwrap();
+                    st.stretch = session.picture_stretch();
+                    st.ui_moved = session.ui_moved();
+                }
             }
         }
         let notices = session.take_notices();

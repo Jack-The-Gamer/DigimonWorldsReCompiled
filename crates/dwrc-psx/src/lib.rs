@@ -286,8 +286,10 @@ impl Psx {
             let mut s = state::Sync::load(&before[STATE_MAGIC.len() + 4..]);
             self.sync_state(&mut s);
         }
-        // RAM changed under the engine either way.
+        // RAM changed under the engine either way, and the widescreen side
+        // strips belong to the pictures before.
         self.engine.flush(&mut self.bus);
+        self.bus.gpu.clear_widescreen();
         if ok {
             Ok(())
         } else {

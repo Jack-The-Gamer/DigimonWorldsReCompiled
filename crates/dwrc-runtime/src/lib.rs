@@ -9,6 +9,7 @@ pub mod pal60;
 pub mod savestate;
 pub mod paths;
 pub mod session;
+pub mod widescreen;
 
 pub use config::Config;
 pub use library::{DiscStatus, Library};

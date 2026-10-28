@@ -235,8 +235,10 @@ impl Bus {
         self.irq = Irq::default();
         self.dma = Dma::new();
         self.timers = Timers::new();
-        let std = self.gpu.standard;
+        let (std, wide, ui) = (self.gpu.standard, self.gpu.widescreen(), self.gpu.widescreen_ui());
         self.gpu = Gpu::new(std);
+        self.gpu.set_widescreen_ui(ui);
+        self.gpu.set_widescreen(wide);
         self.cdrom.reset();
         self.spu = Spu::new();
         self.mdec = Mdec::new();
@@ -1002,6 +1004,7 @@ impl Bus {
         loop {
             let header = u32::from_le_bytes(self.ram[addr as usize..addr as usize + 4].try_into().unwrap());
             let count = header >> 24;
+            self.gpu.packet_addr = 0x8000_0000 | addr;
             for i in 0..count {
                 let a = (addr + 4 * (i + 1)) & 0x1F_FFFC;
                 let v = u32::from_le_bytes(self.ram[a as usize..a as usize + 4].try_into().unwrap());
@@ -1014,6 +1017,7 @@ impl Bus {
             if header & 0x80_0000 != 0 {
                 break;
             }
+            self.gpu.packet_addr = 0;
             addr = header & 0x1F_FFFC;
             guard += 1;
             if guard > 0x10_0000 {
@@ -1021,6 +1025,7 @@ impl Bus {
                 break;
             }
         }
+        self.gpu.packet_addr = 0;
         self.dma.channel_mut(port).base = 0x00FF_FFFF;
         total
     }
