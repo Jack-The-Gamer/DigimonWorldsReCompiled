@@ -27,16 +27,19 @@
 //!   opaque pieces of its left half move left, those of its right half
 //!   right, and its middle, drawn in place, fills the gap between them; its
 //!   letters move with the group's edge. The groups come from the pieces drawn in the
-//!   last few pictures.
+//!   last few pictures. A piece no group holds yet goes with the group it
+//!   lies on or touches, or a moved piece beside it in the same picture, or
+//!   where it went the last time it was seen (`Remembered`).
 //!
 //! None of this is part of the console: VRAM, the GPU's registers and the
 //! game see exactly what a PlayStation does, and save states leave it out.
 //! What the margins show is what the game sent past the edges. Things the
 //! game skipped because they were off screen are missing there.
 //!
-//! An untextured rectangle, or untextured screen-aligned quad, across the
-//! whole width of the area is a screen layer (a backdrop colour, a fade) and
-//! is drawn across the margins too (in `raster`).
+//! An untextured rectangle, or a screen-aligned quad untextured or with a
+//! texture of one colour, across the whole width of the area is a screen
+//! layer (a backdrop colour, a fade) and is drawn across the margins too (in
+//! `raster`).
 //!
 //! The margins are cleared when the game starts on a new picture in that
 //! drawing area: when the display moves to another buffer (double
@@ -69,6 +72,13 @@ const RUN: u64 = 4;
 /// element's edge belongs to what holds it, found by bounds).
 const SLIVER: i64 = 16;
 
+/// Pieces of UI seen before and which way their group moved (-1, 0, 1),
+/// by the size of their drawing area and their box in it; kept across
+/// pictures without them and save state loads (canvases are not).
+type Remembered = std::collections::HashMap<(i32, i32, [i32; 4]), i8>;
+/// Pieces remembered at most (then it starts over).
+const REMEMBER: usize = 8192;
+
 /// How a game draws its UI, for Widescreen UI.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UiRules {
@@ -82,6 +92,10 @@ pub struct UiRules {
     pub pages: Vec<(Option<u8>, u16, u16, u16, bool)>,
     /// Untextured shapes (bar fills, panels) are UI, except screen layers.
     pub untextured: bool,
+    /// Untextured flat-shaded polygons count among them (Digimon World 1
+    /// draws its windows with rectangles and shaded quads, and the black
+    /// edge of the "BATTLE" banner flying over the scene with flat quads).
+    pub flat_polygons: bool,
     /// Insets are UI: drawing into a smaller area inside the picture (a
     /// view drawn in a window, like Digimon World 2003's partner camera), and
     /// copies into the picture from elsewhere in VRAM.
@@ -114,6 +128,8 @@ pub(super) struct Canvas {
     /// stretched group it belongs to splits, if any (the first column of
     /// its right half: a piece starting there or later goes right).
     groups: Vec<([i32; 4], i32, Option<i32>)>,
+    /// UI pieces drawn since the groups were last made, and how far each moved.
+    drawn: Vec<([i32; 4], i32)>,
 }
 
 impl Canvas {
@@ -162,7 +178,7 @@ impl Canvas {
     /// to. A piece of a stretched group is drawn twice: moved to its half's
     /// edge, and in place clipped to the gap that opens in the middle. A
     /// letter or a semi-transparent piece is drawn once.
-    fn ui_shift(&mut self, b: [i32; 4], semi: bool) -> Draws {
+    fn ui_shift(&mut self, b: [i32; 4], semi: bool, seen: &Remembered) -> Draws {
         self.seq += 1;
         let seq = self.seq;
         match self.boxes.iter_mut().rev().find(|(x, _, _)| *x == b) {
@@ -176,10 +192,33 @@ impl Canvas {
             .iter()
             .find(|(g, _, _)| b[0] >= g[0] && b[1] <= g[1] && b[2] >= g[2] && b[3] <= g[3])
             .map(|(_, dx, s)| (*dx, *s))
+            // A piece seen before, in pictures since forgotten (the field HUD
+            // back after a battle or a talk, or after a save state load).
+            .or_else(|| seen.get(&(self.width(), self.y2 - self.y1 + 1, b)).map(|&d| (d as i32 * m, None)))
+            // A piece no group holds yet (an element drawn bigger than in the
+            // last pictures, growing or sliding in): with the group it lies
+            // on or touches most, if any.
+            .or_else(|| {
+                let touch = |g: &[i32; 4]| b[0] <= g[1] + 1 && g[0] <= b[1] + 1 && b[2] <= g[3] + 1 && g[2] <= b[3] + 1;
+                let common = |g: &[i32; 4]| (b[1].min(g[1]) - b[0].max(g[0]) + 1).max(0) as i64 * (b[3].min(g[3]) - b[2].max(g[2]) + 1).max(0) as i64;
+                self.groups.iter().filter(|(g, _, _)| touch(g)).max_by_key(|(g, _, _)| common(g)).map(|(_, dx, s)| (*dx, *s))
+            })
             .unwrap_or_else(|| {
                 let (dx, stretch) = anchor(b, self.width(), m);
-                (dx, (stretch && self.stretch).then_some((b[0] + b[1]) / 2))
+                if dx != 0 {
+                    return (dx, (stretch && self.stretch).then_some((b[0] + b[1]) / 2));
+                }
+                // A new element (no groups for it yet): beside a piece moved
+                // earlier in this picture, with the biggest one (a bar's icon
+                // drawn the first time with it), unless they move both ways.
+                let near = |g: &[i32; 4]| b[0] <= g[1] + BESIDE && g[0] <= b[1] + BESIDE && b[2] <= g[3] + BESIDE && g[2] <= b[3] + BESIDE;
+                let moved: Vec<&([i32; 4], i32)> = self.drawn.iter().filter(|(g, d)| *d != 0 && near(g)).collect();
+                let both_ways = moved.iter().any(|m| m.1 < 0) && moved.iter().any(|m| m.1 > 0);
+                let area = |g: &[i32; 4]| (g[1] - g[0] + 1) as i64 * (g[3] - g[2] + 1) as i64;
+                let dx = if both_ways { 0 } else { moved.iter().max_by_key(|m| area(&m.0)).map_or(0, |m| m.1) };
+                (dx, None)
             });
+        self.drawn.push((b, dx));
         match split {
             Some(at) if !semi && !small(b) => {
                 let side = if b[0] < at { -m } else { m };
@@ -190,10 +229,23 @@ impl Canvas {
     }
 
     /// Vblank: the groups are made again from the recent pieces.
-    fn regroup(&mut self) {
+    fn regroup(&mut self, seen: &mut Remembered) {
         if !self.boxes.iter().any(|(_, age, _)| *age == 0) {
             return;
         }
+        // Remember how the pieces of the last picture moved (unless stretched).
+        if seen.len() > REMEMBER {
+            seen.clear();
+        }
+        let size = (self.width(), self.y2 - self.y1 + 1);
+        for (b, age, _) in &self.boxes {
+            if *age == 0 {
+                if let Some((_, dx, None)) = self.groups.iter().find(|(g, _, _)| b[0] >= g[0] && b[1] <= g[1] && b[2] >= g[2] && b[3] <= g[3]) {
+                    seen.insert((size.0, size.1, *b), dx.signum() as i8);
+                }
+            }
+        }
+        self.drawn.clear();
         for (_, age, _) in &mut self.boxes {
             *age += 1;
         }
@@ -217,6 +269,15 @@ impl Canvas {
         let ok = self.stretch;
         self.groups = groups.iter().map(|&(g, dx, span)| (g, dx, span.filter(|_| ok).map(split))).collect();
     }
+}
+
+/// Whether box `p` lies mostly on box `q`, which is bigger: three quarters
+/// of its area (a text strip drawn on a panel and reaching past its end,
+/// where the strip is transparent: Digimon World 1's save slots).
+fn on(p: [i32; 4], q: [i32; 4]) -> bool {
+    let area = |b: [i32; 4]| (b[1] - b[0] + 1) as i64 * (b[3] - b[2] + 1) as i64;
+    let common = (p[1].min(q[1]) - p[0].max(q[0]) + 1).max(0) as i64 * (p[3].min(q[3]) - p[2].max(q[2]) + 1).max(0) as i64;
+    area(q) > area(p) && 4 * common >= 3 * area(p)
 }
 
 /// A letter or an icon: at most 12×16.
@@ -257,13 +318,15 @@ fn anchored_groups(items: &[([i32; 4], u64)], width: i32, margin: i32) -> Vec<([
     let mut out: Vec<([i32; 4], i32, Option<[i32; 2]>)> = Vec::with_capacity(groups.len());
     // For each placed group, the index of the group holding it.
     let mut held: Vec<Option<usize>> = Vec::with_capacity(groups.len());
+    // Inside another group (2 pixels' leeway), or mostly (see `on`).
+    let holds = |h: &[i32; 4], g: &[i32; 4]| (h[0] - 2 <= g[0] && g[1] <= h[1] + 2 && h[2] - 2 <= g[2] && g[3] <= h[3] + 2) || on(*g, *h);
     for i in order {
         let g = groups[i];
-        // The smallest group already placed that holds this one (2 pixels' leeway).
+        // The smallest group already placed that holds this one.
         let holder = out
             .iter()
             .enumerate()
-            .filter(|(_, (h, _, _))| h[0] - 2 <= g[0] && g[1] <= h[1] + 2 && h[2] - 2 <= g[2] && g[3] <= h[3] + 2 && (!spans(h) || first[h] <= first[&g]))
+            .filter(|(_, (h, _, _))| holds(h, &g) && (!spans(h) || first[h] <= first[&g]))
             .min_by_key(|(_, (h, _, _))| size(h))
             .map(|(j, _)| j);
         let (dx, span) = match holder {
@@ -335,7 +398,7 @@ fn group_boxes(items: &[([i32; 4], u64)]) -> Vec<([i32; 4], u64)> {
             let overlap = (a[1].min(b[1]) - a[0].max(b[0]) + 1).max(0) as i64 * (a[3].min(b[3]) - a[2].max(b[2]) + 1).max(0) as i64;
             // One inside the other is left to the holder rule (a window
             // drawn right after the HUD it covers is not part of it).
-            let inside = |p: [i32; 4], q: [i32; 4]| p[0] >= q[0] && p[1] <= q[1] && p[2] >= q[2] && p[3] <= q[3];
+            let inside = |p: [i32; 4], q: [i32; 4]| (p[0] >= q[0] && p[1] <= q[1] && p[2] >= q[2] && p[3] <= q[3]) || on(p, q);
             let nested = inside(a, b) || inside(b, a);
             if (items[i].1.abs_diff(items[j].1) <= RUN && !nested) || (overlap <= SLIVER && !small(a) && !small(b)) {
                 let (ri, rj) = (root(&mut parent, i), root(&mut parent, j));
@@ -381,6 +444,7 @@ pub(super) struct Wide {
     ui: Option<UiRules>,
     canvases: Vec<Canvas>,
     clock: u64,
+    seen: Remembered,
 }
 
 /// How to draw a piece in the second pass: up to two (move, clip) pairs;
@@ -419,6 +483,7 @@ impl Gpu {
             if w.ui != rules {
                 w.ui = rules;
                 w.canvases.clear();
+                w.seen.clear();
             }
         } else if let Some(r) = rules {
             // Kept for when widescreen comes on.
@@ -444,15 +509,16 @@ impl Gpu {
     }
 
     /// Whether a primitive is part of the game's UI (Widescreen UI on).
-    pub(super) fn is_ui(&self, textured: bool, shaded: bool, layer: bool, clut: u32, size: (i32, i32)) -> bool {
+    pub(super) fn is_ui(&self, textured: bool, shaded: bool, polygon: bool, layer: bool, clut: u32, size: (i32, i32)) -> bool {
         match self.wide.as_ref().and_then(|w| w.ui.as_ref()) {
             None => false,
+            Some(_) if layer => false,
             Some(r) if textured => {
                 let (page, row) = ((self.texpage & 0x1F) as u8, ((clut >> 6) & 0x1FF) as u16);
                 let fits = |m: u16| m == 0 || (size.0 <= m as i32 && size.1 <= m as i32);
                 r.pages.iter().any(|&(p, a, b, m, flat)| p.is_none_or(|p| p == page) && row >= a && row <= b && fits(m) && !(flat && shaded))
             }
-            Some(r) => r.untextured && !layer,
+            Some(r) => r.untextured && !layer && (r.flat_polygons || shaded || !polygon),
         }
     }
 
@@ -476,7 +542,7 @@ impl Gpu {
             }
             let i = w.canvases.iter().position(|c| c.full && x1 >= c.x1 && x2 <= c.x2 && y1 >= c.y1 && y2 <= c.y2)?;
             let mut canvas = w.canvases.swap_remove(i);
-            let dx = canvas.ui_shift([x1 - canvas.x1, x2 - canvas.x1, y1 - canvas.y1, y2 - canvas.y1], true)[0].map_or(0, |d| d.0);
+            let dx = canvas.ui_shift([x1 - canvas.x1, x2 - canvas.x1, y1 - canvas.y1, y2 - canvas.y1], true, &w.seen)[0].map_or(0, |d| d.0);
             self.side = Some(Side { canvas, lo: x1 + dx, hi: x2 + dx, x1: x1 + dx, x2: x2 + dx, full: true, lo0: x1 + dx, hi0: x2 + dx });
             if let Some(p) = self.trace.as_mut().and_then(|t| t.last_mut()) {
                 p.shift = Some(dx);
@@ -512,6 +578,7 @@ impl Gpu {
                     boxes: Vec::new(),
                     seq: 0,
                     groups: Vec::new(),
+                    drawn: Vec::new(),
                 };
                 if full {
                     // The picture drawn so far.
@@ -523,7 +590,7 @@ impl Gpu {
         };
         let mut canvas = w.canvases.swap_remove(i);
         canvas.used = w.clock;
-        let mut draws = if ui { canvas.ui_shift([xmin - x1, xmax - x1, ymin - y1, ymax - y1], semi) } else { [Some((0, None)), None] };
+        let mut draws = if ui { canvas.ui_shift([xmin - x1, xmax - x1, ymin - y1, ymax - y1], semi, &w.seen) } else { [Some((0, None)), None] };
         for (_, clip) in draws.iter_mut().flatten() {
             if let Some((a, b)) = clip {
                 *clip = Some((*a + x1, *b + x1));
@@ -586,7 +653,7 @@ impl Gpu {
     pub(super) fn wide_vblank(&mut self) {
         if let Some(w) = &mut self.wide {
             for c in w.canvases.iter_mut().filter(|c| c.full) {
-                c.regroup();
+                c.regroup(&mut w.seen);
             }
         }
     }
@@ -671,7 +738,7 @@ impl Gpu {
                 let (sx, sy) = (sx as i32, sy as i32);
                 sx + w <= c.x1 || sx > c.x2 || sy + h <= c.y1 || sy > c.y2
             });
-            let dx = if copies_ui && outside { c.ui_shift([x - c.x1, x + w - 1 - c.x1, y - c.y1, y + h - 1 - c.y1], true)[0].map_or(0, |d| d.0) } else { 0 };
+            let dx = if copies_ui && outside { c.ui_shift([x - c.x1, x + w - 1 - c.x1, y - c.y1, y + h - 1 - c.y1], true, &wd.seen)[0].map_or(0, |d| d.0) } else { 0 };
             c.mirror(&self.vram, x, y, w, h, dx);
         }
     }
@@ -803,6 +870,16 @@ mod tests {
         let g = anchored_groups(&[([13, 109, 24, 82], 1), ([112, 208, 24, 82], 2)], 320, 53);
         let dx = |x: i32| g.iter().find(|(b, _, _)| b[0] == x).unwrap().1;
         assert_eq!((dx(13), dx(112)), (-53, 0));
+    }
+
+    #[test]
+    fn a_strip_mostly_on_its_panel_stays_with_it() {
+        // Digimon World 1's save slot: a panel in the middle, and a text strip
+        // drawn on it that reaches past its right end, close to the screen's edge.
+        let items = [([51, 269, 44, 74], 1), ([88, 312, 60, 72], 2)];
+        assert_eq!(group_boxes(&items).len(), 2);
+        let g = anchored_groups(&items, 320, 53);
+        assert!(g.iter().all(|(_, dx, _)| *dx == 0), "{g:?}");
     }
 
     #[test]

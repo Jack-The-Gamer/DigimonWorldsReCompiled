@@ -13,9 +13,9 @@
 //! edges, so the strips stay black beside them.
 
 use crate::config::Widescreen;
-use dwrc_disc::GameId;
+use dwrc_disc::{GameId, PsxExe};
 use dwrc_psx::gpu::UiRules;
-use dwrc_psx::Psx;
+use dwrc_psx::{HookAction, Psx};
 
 /// Whether a game is shown in widescreen when it is switched on.
 pub fn supported(game: GameId) -> bool {
@@ -101,16 +101,18 @@ fn gcd(a: u32, b: u32) -> u32 {
 /// screen, so what it covers stays with it).
 pub fn ui_rules(game: GameId) -> Option<UiRules> {
     match game {
-        GameId::Dw3 => Some(UiRules { pages: vec![(Some(5), 0, 511, 0, false), (Some(6), 0, 511, 0, false), (Some(8), 0, 511, 0, false)], untextured: true, insets: true, stretch: true }),
+        GameId::Dw3 => Some(UiRules { pages: vec![(Some(5), 0, 511, 0, false), (Some(6), 0, 511, 0, false), (Some(8), 0, 511, 0, false)], untextured: true, flat_polygons: true, insets: true, stretch: true }),
         GameId::Dw2 => Some(UiRules {
             pages: vec![(Some(7), 0, 511, 48, true), (Some(15), 0, 511, 48, true), (Some(12), 248, 248, 0, false), (Some(12), 249, 253, 24, false), (Some(30), 0, 511, 0, true)],
             untextured: false,
+            flat_polygons: false,
             insets: false,
             stretch: false,
         }),
         GameId::Dw1 => Some(UiRules {
             pages: vec![(Some(30), 491, 499, 0, false), (Some(5), 496, 511, 0, false), (Some(31), 496, 498, 0, false), (Some(27), 0, 511, 0, false)],
             untextured: true,
+            flat_polygons: false,
             insets: false,
             stretch: false,
         }),
@@ -122,6 +124,112 @@ pub fn ui_rules(game: GameId) -> Option<UiRules> {
 pub fn apply(psx: &mut Psx, game: GameId, w: Widescreen, ui: bool) {
     psx.bus.gpu.set_widescreen_ui(if ui { ui_rules(game) } else { None });
     psx.bus.gpu.set_widescreen(w.widening());
+}
+
+/// Digimon World 1's field scroll limits (`0x800D7F68` on SLUS-01032), with
+/// what to take from each word: the function's instructions, address
+/// fields (`lui`, and loads/stores off `at` or `gp`) masked, as `(word, mask)`.
+///
+/// Every frame the field code calls it before it scrolls: it keeps the
+/// scroll (a halfword per axis, in pixels) between 0 and the map's size
+/// (a byte per axis, in 128-pixel tiles) less the screen (320×240), and
+/// says per axis (flags at `a0`, `a1`) whether the scroll may move. When it
+/// stops one, a companion word (gp-relative; the base it was set from at
+/// the map's load, less the scroll) is reset to the base at that end.
+const DW1_SCROLL_LIMITS: [(u32, u32); 53] = {
+    const F: u32 = 0xFFFF_FFFF;
+    const A: u32 = 0xFFFF_0000;
+    [
+        (0x24020001, F), (0xACA20000, F), (0xAC820000, F), (0x3C010000, A), (0x84220000, A), (0x00000000, F), (0x04410007, F), (0x00401821, F),
+        (0x87820000, A), (0x3C010000, A), (0xA4200000, A), (0xAF820000, A), (0x1000000E, F), (0xAC800000, F), (0x3C010000, A), (0x80220000, A),
+        (0x00000000, F), (0x000211C0, F), (0x2042FEC0, F), (0x0043082A, F), (0x10200006, F), (0x00403021, F), (0x87820000, A), (0x3C010000, A),
+        (0xA4260000, A), (0xAF820000, A), (0xAC800000, F), (0x3C010000, A), (0x84220000, A), (0x00000000, F), (0x04410007, F), (0x00401821, F),
+        (0x87820000, A), (0x3C010000, A), (0xA4200000, A), (0xAF820000, A), (0x1000000E, F), (0xACA00000, F), (0x3C010000, A), (0x80220000, A),
+        (0x00000000, F), (0x000211C0, F), (0x2042FF10, F), (0x0043082A, F), (0x10200006, F), (0x00402021, F), (0x87820000, A), (0x3C010000, A),
+        (0xA4240000, A), (0xAF820000, A), (0xACA00000, F), (0x03E00008, F), (0x00000000, F),
+    ]
+};
+
+/// One axis of Digimon World 1's field scroll: where its values are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ScrollAxis {
+    /// The scroll (halfword) and the map's size in tiles (signed byte).
+    scroll: u32,
+    size: u32,
+    /// The screen's size on this axis.
+    screen: i32,
+    /// The companion word and its bases at either end (gp-relative).
+    other: i16,
+    low_base: i16,
+    high_base: i16,
+}
+
+impl ScrollAxis {
+    /// Keeps the scroll `margin` pixels inside the map's ends (the game: 0),
+    /// as the game does; returns whether it may move.
+    fn limit(&self, bus: &mut dwrc_psx::Bus, gp: u32, margin: i32) -> bool {
+        let scroll = bus.peek16(self.scroll) as i16 as i32;
+        let max = bus.peek8(self.size) as i8 as i32 * 128 - self.screen;
+        // A map narrower than the wide picture: the scroll stays in its middle.
+        let margin = margin.min(max.max(0) / 2);
+        let (lo, hi) = (margin, max - margin);
+        let gpw = |off: i16| gp.wrapping_add(off as i32 as u32);
+        let base = |bus: &dwrc_psx::Bus, off: i16| bus.peek16(gpw(off)) as i16 as i32;
+        let (at, other) = if scroll < lo {
+            (lo, base(bus, self.low_base) - lo)
+        } else if scroll > hi {
+            (hi, base(bus, self.high_base) + (max - hi))
+        } else {
+            return true;
+        };
+        bus.poke16(self.scroll, at as u16);
+        bus.poke32(gpw(self.other), other as u32);
+        false
+    }
+}
+
+/// Finds Digimon World 1's field scroll limits in the executable: the
+/// function's address and its two axes.
+fn find_scroll_limits(exe: &PsxExe) -> Option<(u32, [ScrollAxis; 2])> {
+    let words: Vec<u32> = exe.text.chunks_exact(4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+    let at = words.windows(DW1_SCROLL_LIMITS.len()).position(|w| w.iter().zip(&DW1_SCROLL_LIMITS).all(|(&x, &(want, mask))| x & mask == want))?;
+    let w = &words[at..];
+    let imm = |i: usize| w[i] as u16 as i16;
+    // `lui at, hi` then a load off `at`.
+    let abs = |i: usize| ((w[i] & 0xFFFF) << 16).wrapping_add(imm(i + 1) as i32 as u32);
+    let axis = |base: usize, screen: i32| ScrollAxis { scroll: abs(base + 3), size: abs(base + 14), screen, other: imm(base + 11), low_base: imm(base + 8), high_base: imm(base + 22) };
+    Some((exe.load_addr + 4 * at as u32, [axis(0, 320), axis(24, 240)]))
+}
+
+/// Digimon World 1's field scrolls until the edge of its 4:3 screen meets
+/// the end of the map, so a wide picture would show past the map's ends
+/// (black). Hooks the game's scroll limits to stop the scroll the
+/// widescreen margin earlier, while widescreen is on; with it off the game's
+/// own code runs. Returns whether the executable has the function.
+pub fn install_scroll_limits(psx: &mut Psx, game: GameId, exe: &PsxExe) -> bool {
+    if game != GameId::Dw1 {
+        return false;
+    }
+    let Some((addr, [x, y])) = find_scroll_limits(exe) else {
+        log::warn!("widescreen: Digimon World 1's field scroll limits not found; the field may scroll past the map's ends");
+        return false;
+    };
+    psx.bus.add_hook(
+        addr,
+        Box::new(move |cpu, bus| {
+            let Some((num, den)) = bus.gpu.widescreen() else { return HookAction::Continue };
+            let margin = dwrc_psx::gpu::widescreen_margin(320, num, den) as i32;
+            let (gp, flag_x, flag_y) = (cpu.regs[28], cpu.regs[4], cpu.regs[5]);
+            let mx = x.limit(bus, gp, margin);
+            let my = y.limit(bus, gp, 0);
+            bus.poke32(flag_x, mx as u32);
+            bus.poke32(flag_y, my as u32);
+            let ra = cpu.regs[31];
+            cpu.set_pc(ra);
+            HookAction::Redirect
+        }),
+    );
+    true
 }
 
 /// The middle `keep` columns of a frame (a widescreen frame cut to 4:3).

@@ -126,6 +126,7 @@ impl Session {
         }
         mod_rt.install(&mut psx);
         let widescreen = if crate::widescreen::supported(game) { cfg.video.widescreen } else { Widescreen::Off };
+        crate::widescreen::install_scroll_limits(&mut psx, game, &exe);
         crate::widescreen::apply(&mut psx, game, widescreen, cfg.video.widescreen_ui);
         log::info!(
             "starting {} ({}) with the {} engine and the {bios_name} BIOS{}{}",

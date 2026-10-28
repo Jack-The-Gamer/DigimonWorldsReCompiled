@@ -207,15 +207,19 @@ impl Gpu {
         if self.trace.is_some() {
             self.trace_prim(op, xmin, xmax, ymin, ymax, clut);
         }
-        // An untextured screen-aligned quad across the whole area is a screen
-        // layer (a backdrop, a fade): it goes across the strips too.
-        let layer = quad
-            && !textured
+        // A screen-aligned quad across the whole area, untextured or with a
+        // texture of one colour (Digimon World 1 fades with a subtractive
+        // quad on a flat texture), is a screen layer (a backdrop, a fade): it
+        // goes across the strips too, stretched (its UVs stay inside the
+        // texture, so a flat one stays flat).
+        let layer = self.wide.is_some()
+            && quad
             && xmin <= self.draw_x1
             && xmax >= self.draw_x2
             && verts.iter().filter(|v| v.x == xmin).count() == 2
-            && verts.iter().filter(|v| v.x == xmax).count() == 2;
-        let ui = self.is_ui(textured, shaded, layer, clut, (xmax - xmin + 1, ymax - ymin + 1));
+            && verts.iter().filter(|v| v.x == xmax).count() == 2
+            && (!prim.textured || self.flat_texture(&verts, &prim));
+        let ui = self.is_ui(textured, shaded, true, layer, clut, (xmax - xmin + 1, ymax - ymin + 1));
         if let Some(draws) = self.side_begin(if layer { self.draw_x1 - 1 } else { xmin }, xmax, ymin, ymax, ui, semi) {
             if layer {
                 let (lo, hi) = self.side.as_ref().map(|s| (s.lo, s.hi)).unwrap();
@@ -450,6 +454,18 @@ impl Gpu {
     }
 
     #[inline(always)]
+    /// Whether a quad's texture is one colour over its UV range (small
+    /// ranges only: a flat texture is a few texels stretched).
+    fn flat_texture(&self, verts: &[Vertex; 4], prim: &Prim) -> bool {
+        let (u0, u1) = (verts.iter().map(|v| v.u).min().unwrap(), verts.iter().map(|v| v.u).max().unwrap());
+        let (v0, v1) = (verts.iter().map(|v| v.v).min().unwrap(), verts.iter().map(|v| v.v).max().unwrap());
+        if (u1 - u0 + 1) * (v1 - v0 + 1) > 64 * 64 {
+            return false;
+        }
+        let first = self.texel(u0 as u32, v0 as u32, prim);
+        (v0..=v1).all(|v| (u0..=u1).all(|u| self.texel(u as u32, v as u32, prim) == first))
+    }
+
     fn texel(&self, u: u32, v: u32, prim: &Prim) -> u16 {
         let tw = self.tex_window;
         let mask_x = (tw & 0x1F) * 8;
@@ -535,7 +551,7 @@ impl Gpu {
         // An untextured rectangle across the whole area is a screen layer (a
         // backdrop, a fade): it goes across the strips too.
         let layer = !textured && x0 <= self.draw_x1 && x0 + w - 1 >= self.draw_x2;
-        let ui = self.is_ui(textured, false, layer, clut, (w, h));
+        let ui = self.is_ui(textured, false, false, layer, clut, (w, h));
         if w <= 0 {
             return;
         }
