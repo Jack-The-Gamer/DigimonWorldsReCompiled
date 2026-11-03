@@ -83,10 +83,17 @@ impl Session {
 
         // Mods: disc overrides first (they edit the virtual disc).
         let enabled_mods: Vec<String> = mods.iter().map(|m| m.info.id().to_string()).collect();
+        // The other games' discs, for mods that draw on them (`uses_games`).
+        let mut others = dwrc_mods::others::OtherDiscs::default();
+        for (g, e) in lib.games.iter().filter(|(g, _)| **g != game) {
+            let entry = e.clone();
+            others.add(*g, &e.ident.serial, &e.ident.title, move || crate::library::open_disc(&entry));
+        }
         let mut mod_rt = {
             let mut ctx = dwrc_mods::disc::DiscContext::new(&mut disc);
-            ModRuntime::build(game, &ident.serial, &mods, &mut ctx)
+            ModRuntime::build_with_others(game, &ident.serial, &mods, &mut ctx, &mut others)
         };
+        drop(others);
         for l in &mod_rt.log {
             log::info!("{l}");
         }

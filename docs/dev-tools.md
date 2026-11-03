@@ -27,6 +27,7 @@ Build with `cargo build --release -p dwrc-cli`; the tool is `target/release/dwrc
 | `--wav FILE` | record audio |
 | `--input "frame:button:len,..."` | scripted input, e.g. `1000:start:10,1200:x:6` (buttons: start select x o t s up down left right l1 r1 l2 r2) |
 | `--mod DIR` | enable a mod folder (repeatable) |
+| `--other-disc FILE` | another game's disc (`.cue` or `.bin`) for mods with `uses_games` to read through `dwrc.discs` (repeatable) |
 | `--tty` | echo the BIOS/game debug console |
 | `--card1 FILE.mcd` / `--card2` | use (and afterwards save, also after `--serve`) memory card images |
 | `--pal60` | run Digimon World 2003 (Europe) in its own 60 Hz mode, as the launcher does by default |

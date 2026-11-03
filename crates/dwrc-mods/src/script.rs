@@ -25,9 +25,15 @@
 //! dwrc.show_image(name, file [, {corner=, x=, y=, scale=}]) -- a PNG from
 //!                          the mod's folder over the picture, until
 //! dwrc.hide_image(name)
+//! dwrc.disc.read(lba [, count]) -- while the mod loads: data sectors as a string
+//! dwrc.disc.write(lba, data) -- ... replace sectors of the virtual disc
+//! dwrc.disc.append(data) -- ... add data past the disc's end; returns its LBA
+//! dwrc.disc.sectors()    -- ... the disc's size in sectors, appended ones included
 //! ```
 //!
-//! `dwrc.on_exec` may also be called later (from `on_frame`, say, once the
+//! `dwrc.disc` only works in a script's main chunk, which runs while the
+//! virtual disc is built, before the game starts; it never touches the
+//! player's image. `dwrc.on_exec` may also be called later (from `on_frame`, say, once the
 //! game's code is in memory); the hook is installed before the next frame.
 //!
 //! Callbacks receive a `ctx` giving access to the console while it is
@@ -319,6 +325,110 @@ fn sandboxed_lua(root: &std::path::Path, id: &str) -> mlua::Result<Lua> {
     Ok(lua)
 }
 
+/// The most `dwrc.disc` reads or writes at once.
+const DISC_MAX_BYTES: usize = 32 << 20;
+
+/// `dwrc.disc.read(lba [, count])`: the 2048 data bytes of each sector, the
+/// virtual disc's (with earlier mods' changes), as one string.
+fn disc_read(lua: &Lua, d: &mut crate::disc::DiscContext, lba: u32, count: u32) -> mlua::Result<mlua::String> {
+    if count == 0 || count as usize * 2048 > DISC_MAX_BYTES {
+        return Err(mlua::Error::runtime(format!("dwrc.disc.read: 1 to {} sectors at once", DISC_MAX_BYTES / 2048)));
+    }
+    let end = d.disc.append_position() - dwrc_disc::msf::PREGAP_SECTORS;
+    if lba.checked_add(count).is_none_or(|e| e > end) {
+        return Err(mlua::Error::runtime(format!("dwrc.disc.read: sectors {lba}..{} are past the disc's end ({end})", lba as u64 + count as u64)));
+    }
+    let mut out = vec![0u8; count as usize * 2048];
+    for (i, chunk) in out.chunks_mut(2048).enumerate() {
+        d.disc.read_user_data(lba + i as u32, chunk).map_err(|e| mlua::Error::runtime(format!("dwrc.disc.read: {e}")))?;
+    }
+    lua.create_string(&out)
+}
+
+/// `dwrc.discs`: read-only access to the player's discs of the games a mod
+/// names in `uses_games` (the disc each game plays), while the mod loads.
+fn discs_table<'scope, 'env: 'scope>(
+    lua: &Lua,
+    scope: &'scope mlua::Scope<'scope, 'env>,
+    others: &'env std::cell::RefCell<&'env mut crate::others::OtherDiscs>,
+    games: &'env [dwrc_disc::GameId],
+) -> mlua::Result<mlua::Table> {
+    let pick = move |name: &str, game: &str| -> mlua::Result<dwrc_disc::GameId> {
+        let g = dwrc_disc::GameId::from_slug(&game.to_ascii_lowercase()).ok_or_else(|| mlua::Error::runtime(format!("dwrc.discs.{name}: '{game}' is not dw1, dw2 or dw3")))?;
+        if !games.contains(&g) {
+            return Err(mlua::Error::runtime(format!("dwrc.discs.{name}: add \"{game}\" to uses_games in mod.toml to read its disc")));
+        }
+        if others.borrow().info(g).is_none() {
+            return Err(mlua::Error::runtime(format!("dwrc.discs.{name}: no {game} disc in the library (check dwrc.discs.info first)")));
+        }
+        Ok(g)
+    };
+    let info = move |lua: &Lua, g: dwrc_disc::GameId| -> mlua::Result<Value> {
+        let o = others.borrow();
+        match o.info(g) {
+            Some((serial, title)) if games.contains(&g) => {
+                let t = lua.create_table()?;
+                t.set("game", g.slug())?;
+                t.set("serial", serial)?;
+                t.set("title", title)?;
+                Ok(Value::Table(t))
+            }
+            _ => Ok(Value::Nil),
+        }
+    };
+    let t = lua.create_table()?;
+    t.set(
+        "list",
+        scope.create_function(move |lua, ()| {
+            let out = lua.create_table()?;
+            for g in games {
+                if let Value::Table(e) = info(lua, *g)? {
+                    out.push(e)?;
+                }
+            }
+            Ok(out)
+        })?,
+    )?;
+    t.set(
+        "info",
+        scope.create_function(move |lua, game: String| match dwrc_disc::GameId::from_slug(&game.to_ascii_lowercase()) {
+            Some(g) => info(lua, g),
+            None => Err(mlua::Error::runtime(format!("dwrc.discs.info: '{game}' is not dw1, dw2 or dw3"))),
+        })?,
+    )?;
+    t.set(
+        "read",
+        scope.create_function(move |lua, (game, lba, count): (String, u32, Option<u32>)| {
+            let g = pick("read", &game)?;
+            let count = count.unwrap_or(1);
+            if count == 0 || count as usize * 2048 > DISC_MAX_BYTES {
+                return Err(mlua::Error::runtime(format!("dwrc.discs.read: 1 to {} sectors at once", DISC_MAX_BYTES / 2048)));
+            }
+            let mut o = others.borrow_mut();
+            let d = o.disc(g).map_err(|e| mlua::Error::runtime(format!("dwrc.discs.read: {e:#}")))?;
+            let end = d.append_position() - dwrc_disc::msf::PREGAP_SECTORS;
+            if lba.checked_add(count).is_none_or(|e| e > end) {
+                return Err(mlua::Error::runtime(format!("dwrc.discs.read: sectors {lba}..{} are past the disc's end ({end})", lba as u64 + count as u64)));
+            }
+            let mut out = vec![0u8; count as usize * 2048];
+            for (i, chunk) in out.chunks_mut(2048).enumerate() {
+                d.read_user_data(lba + i as u32, chunk).map_err(|e| mlua::Error::runtime(format!("dwrc.discs.read: {e}")))?;
+            }
+            lua.create_string(&out)
+        })?,
+    )?;
+    t.set(
+        "sectors",
+        scope.create_function(move |_, game: String| {
+            let g = pick("sectors", &game)?;
+            let mut o = others.borrow_mut();
+            let d = o.disc(g).map_err(|e| mlua::Error::runtime(format!("dwrc.discs.sectors: {e:#}")))?;
+            Ok(d.append_position() - dwrc_disc::msf::PREGAP_SECTORS)
+        })?,
+    )?;
+    Ok(t)
+}
+
 impl ScriptHost {
     pub fn load(
         id: &str,
@@ -327,6 +437,37 @@ impl ScriptHost {
         path: &std::path::Path,
         options: crate::OptionValues,
         data_dir: PathBuf,
+    ) -> Result<Self> {
+        Self::load_with_disc(id, game, serial, path, options, data_dir, None)
+    }
+
+    /// Loads a script; while its main chunk runs, `dwrc.disc` reads and
+    /// changes the virtual disc `disc` (when given).
+    pub fn load_with_disc(
+        id: &str,
+        game: dwrc_disc::GameId,
+        serial: &str,
+        path: &std::path::Path,
+        options: crate::OptionValues,
+        data_dir: PathBuf,
+        disc: Option<&mut crate::disc::DiscContext>,
+    ) -> Result<Self> {
+        Self::load_with_discs(id, game, serial, path, options, data_dir, disc, None)
+    }
+
+    /// [`load_with_disc`](Self::load_with_disc), and while the main chunk
+    /// runs `dwrc.discs` reads the player's discs of the games in `others`'
+    /// list (the mod's `uses_games`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn load_with_discs(
+        id: &str,
+        game: dwrc_disc::GameId,
+        serial: &str,
+        path: &std::path::Path,
+        options: crate::OptionValues,
+        data_dir: PathBuf,
+        disc: Option<&mut crate::disc::DiscContext>,
+        others: Option<(&mut crate::others::OtherDiscs, Vec<dwrc_disc::GameId>)>,
     ) -> Result<Self> {
         let lua = sandboxed_lua(path.parent().unwrap_or(std::path::Path::new(".")), id).map_err(|e| anyhow!("{e}"))?;
         let state = Arc::new(Mutex::new(HostState::new()));
@@ -534,11 +675,69 @@ impl ScriptHost {
             lua.globals().set("dwrc", api).map_err(le)?;
         }
         let src = std::fs::read_to_string(path)?;
-        lua.load(&src)
-            .set_name(path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())
-            .set_mode(mlua::ChunkMode::Text)
-            .exec()
-            .map_err(|e| anyhow!("{e}"))?;
+        let chunk = lua.load(&src).set_name(path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()).set_mode(mlua::ChunkMode::Text);
+        let api: mlua::Table = lua.globals().get("dwrc").map_err(|e| anyhow!("{e}"))?;
+        // dwrc.disc and dwrc.discs work while the script's main chunk runs,
+        // when the virtual disc is being built and the game hasn't read it yet.
+        let others = others.map(|(o, games)| (std::cell::RefCell::new(o), games));
+        match disc {
+            None => lua
+                .scope(|scope| {
+                    if let Some((o, games)) = &others {
+                        api.set("discs", discs_table(&lua, scope, o, games)?)?;
+                    }
+                    chunk.exec()
+                })
+                .map_err(|e| anyhow!("{e}"))?,
+            Some(d) => {
+                let disc = std::cell::RefCell::new(d);
+                lua.scope(|scope| {
+                    if let Some((o, games)) = &others {
+                        api.set("discs", discs_table(&lua, scope, o, games)?)?;
+                    }
+                    let t = lua.create_table()?;
+                    t.set("read", scope.create_function(|lua, (lba, count): (u32, Option<u32>)| disc_read(lua, &mut disc.borrow_mut(), lba, count.unwrap_or(1)))?)?;
+                    t.set(
+                        "write",
+                        scope.create_function(|_, (lba, data): (u32, mlua::String)| {
+                            let data = data.as_bytes();
+                            if data.len() > DISC_MAX_BYTES {
+                                return Err(mlua::Error::runtime(format!("dwrc.disc.write: at most {} MiB at once", DISC_MAX_BYTES >> 20)));
+                            }
+                            disc.borrow_mut().write_data(lba, &data, false).map_err(|e| mlua::Error::runtime(format!("dwrc.disc.write: {e:#}")))
+                        })?,
+                    )?;
+                    t.set(
+                        "append",
+                        scope.create_function(|_, data: mlua::String| {
+                            let data = data.as_bytes();
+                            if data.len() > DISC_MAX_BYTES {
+                                return Err(mlua::Error::runtime(format!("dwrc.disc.append: at most {} MiB at once", DISC_MAX_BYTES >> 20)));
+                            }
+                            let mut d = disc.borrow_mut();
+                            let lba = d.disc.append_position() - dwrc_disc::msf::PREGAP_SECTORS;
+                            d.write_data(lba, &data, false).map_err(|e| mlua::Error::runtime(format!("dwrc.disc.append: {e:#}")))?;
+                            Ok(lba)
+                        })?,
+                    )?;
+                    t.set("sectors", scope.create_function(|_, ()| Ok(disc.borrow().disc.append_position() - dwrc_disc::msf::PREGAP_SECTORS))?)?;
+                    api.set("disc", t)?;
+                    chunk.exec()
+                })
+                .map_err(|e| anyhow!("{e}"))?;
+            }
+        }
+        // Later calls get a clear error instead of a destroyed function.
+        for (table, names) in [("disc", &["read", "write", "append", "sectors"][..]), ("discs", &["list", "info", "read", "sectors"][..])] {
+            let late = lua.create_table().map_err(|e| anyhow!("{e}"))?;
+            for name in names {
+                let f = lua
+                    .create_function(move |_, _: mlua::MultiValue| -> mlua::Result<()> { Err(mlua::Error::runtime(format!("dwrc.{table}.{name} only works while the mod loads (in its main chunk), before the game starts"))) })
+                    .map_err(|e| anyhow!("{e}"))?;
+                late.set(*name, f).map_err(|e| anyhow!("{e}"))?;
+            }
+            api.set(table, late).map_err(|e| anyhow!("{e}"))?;
+        }
         Ok(Self { id: id.to_string(), lua, state, data_dir, installed: Vec::new() })
     }
 
@@ -813,6 +1012,112 @@ mod tests {
         assert_eq!(host.take_requests(), vec![StateRequest::Save(2), StateRequest::Load(2)]);
         assert!(host.take_requests().is_empty());
         assert_eq!(host.take_notices(), vec!["key F5 with ctrl".to_string()]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn disc_access_while_loading() {
+        use dwrc_disc::SectorSource;
+        let d = std::env::temp_dir().join(format!("dwrc-disc-api-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        // A 40-sector Mode 2 image whose sector n's data starts with n.
+        let mut img = vec![0u8; 40 * 2352];
+        for n in 0..40usize {
+            let s = &mut img[n * 2352..(n + 1) * 2352];
+            s[15] = 2;
+            s[24] = n as u8;
+            s[25] = 0xAB;
+        }
+        std::fs::write(d.join("game.bin"), &img).unwrap();
+        std::fs::write(
+            d.join("main.lua"),
+            r#"
+            local s = dwrc.disc.read(5, 2)
+            assert(#s == 4096 and s:byte(1) == 5 and s:byte(2) == 0xAB and s:byte(2049) == 6)
+            assert(dwrc.disc.sectors() == 40)
+            dwrc.disc.write(6, "hello")
+            assert(dwrc.disc.read(6):sub(1, 5) == "hello")
+            first = dwrc.disc.append(string.rep("x", 3000))
+            assert(first == 40 and dwrc.disc.sectors() == 42)
+            assert(dwrc.disc.read(41):sub(1, 3) == "xxx")
+            assert(not pcall(dwrc.disc.read, 42))
+            assert(not pcall(dwrc.disc.read, 0, 0))
+            dwrc.on_frame(function(ctx)
+              local ok, e = pcall(dwrc.disc.read, 5)
+              assert(not ok and tostring(e):find("only works while the mod loads"))
+              late_checked = true
+            end)
+            "#,
+        )
+        .unwrap();
+        let mut disc = dwrc_disc::Disc::open(&d.join("game.bin")).unwrap();
+        let mut host = {
+            let mut ctx = crate::disc::DiscContext::new(&mut disc);
+            ScriptHost::load_with_disc("t", dwrc_disc::GameId::Dw3, "SLES-03936", &d.join("main.lua"), Default::default(), d.join("data"), Some(&mut ctx)).unwrap()
+        };
+        let mut raw = [0u8; dwrc_disc::RAW_SECTOR_SIZE];
+        disc.read_raw(6 + dwrc_disc::msf::PREGAP_SECTORS, &mut raw).unwrap();
+        assert_eq!(&raw[24..29], b"hello");
+        disc.read_raw(41 + dwrc_disc::msf::PREGAP_SECTORS, &mut raw).unwrap();
+        assert_eq!(&raw[24..27], b"xxx");
+        assert_eq!(raw[24 + 3000 - 2048], 0, "the last sector is padded with zeros");
+        assert_eq!(disc.lead_out(), 42 + dwrc_disc::msf::PREGAP_SECTORS, "the drive sees the appended sectors");
+        // The player's image is untouched.
+        assert_eq!(std::fs::read(d.join("game.bin")).unwrap(), img);
+        let mut psx = dwrc_psx::Psx::new(&vec![0u8; 512 * 1024], dwrc_psx::VideoStandard::Pal);
+        host.on_frame(&mut psx.cpu, &mut psx.bus, 1).unwrap();
+        assert!(host.lua.globals().get::<bool>("late_checked").unwrap());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn other_discs_while_loading() {
+        let d = std::env::temp_dir().join(format!("dwrc-discs-api-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        // A 20-sector Mode 2 image standing in for another game's disc.
+        let mut img = vec![0u8; 20 * 2352];
+        for n in 0..20usize {
+            let s = &mut img[n * 2352..(n + 1) * 2352];
+            s[15] = 2;
+            s[24] = n as u8;
+            s[25] = 0xCD;
+        }
+        std::fs::write(d.join("dw3.bin"), &img).unwrap();
+        std::fs::write(
+            d.join("main.lua"),
+            r#"
+            local l = dwrc.discs.list()
+            assert(#l == 1 and l[1].game == "dw3" and l[1].serial == "SLES-03936" and l[1].title == "DW2003")
+            assert(dwrc.discs.info("dw3").serial == "SLES-03936")
+            assert(dwrc.discs.info("dw2") == nil, "a disc not in uses_games is invisible")
+            assert(dwrc.discs.info("dw1") == nil)
+            local s = dwrc.discs.read("dw3", 3, 2)
+            assert(#s == 4096 and s:byte(1) == 3 and s:byte(2) == 0xCD and s:byte(2049) == 4)
+            assert(dwrc.discs.sectors("dw3") == 20)
+            local ok, e = pcall(dwrc.discs.read, "dw2", 0)
+            assert(not ok and tostring(e):find("uses_games"))
+            ok, e = pcall(dwrc.discs.read, "dw1", 0)
+            assert(not ok and tostring(e):find("no dw1 disc"))
+            assert(not pcall(dwrc.discs.read, "dw3", 20))
+            assert(not pcall(dwrc.discs.read, "dw9", 0))
+            dwrc.on_frame(function(ctx)
+              local ok, e = pcall(dwrc.discs.read, "dw3", 0)
+              assert(not ok and tostring(e):find("only works while the mod loads"))
+              late_checked = true
+            end)
+            "#,
+        )
+        .unwrap();
+        let mut others = crate::others::OtherDiscs::default();
+        let p = d.join("dw3.bin");
+        others.add(dwrc_disc::GameId::Dw3, "SLES-03936", "DW2003", move || Ok(dwrc_disc::Disc::open(&p)?));
+        others.add(dwrc_disc::GameId::Dw2, "SLUS-01193", "DW2", || anyhow::bail!("not opened: not in uses_games"));
+        let uses = vec![dwrc_disc::GameId::Dw3, dwrc_disc::GameId::Dw1];
+        let mut host = ScriptHost::load_with_discs("t", dwrc_disc::GameId::Dw1, "SLUS-01032", &d.join("main.lua"), Default::default(), d.join("data"), None, Some((&mut others, uses))).unwrap();
+        assert_eq!(std::fs::read(d.join("dw3.bin")).unwrap(), img, "the other disc is untouched");
+        let mut psx = dwrc_psx::Psx::new(&vec![0u8; 512 * 1024], dwrc_psx::VideoStandard::Ntsc);
+        host.on_frame(&mut psx.cpu, &mut psx.bus, 1).unwrap();
+        assert!(host.lua.globals().get::<bool>("late_checked").unwrap());
         let _ = std::fs::remove_dir_all(&d);
     }
 

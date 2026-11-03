@@ -80,6 +80,7 @@ engine = ">=1.0"             # optional: Re:Compiled versions it works with
 dependencies = ["core-lib@>=1.2"]   # optional: mods that must also be on
 conflicts = ["other-mod"]           # optional: mods it cannot run with
 experimental = false         # optional: marks unfinished work
+uses_games = ["dw3"]         # optional: other games whose discs the script reads (dwrc.discs)
 
 [[option]]                   # shown in the mod manager
 id = "multiplier"
@@ -195,7 +196,7 @@ Everything in `files/` replaces the file with the same path on the disc, e.g. `f
 
 ### Digimon World 2 and 2003 (raw LBAs)
 
-These discs contain only the executable and a `DUMMY` file in the filesystem; all game data is read by sector number. Use `[[lba]]` entries to overwrite data in place, with `max_sectors` as a safety check. (Relocating larger data needs the game's LBA table, which can be patched with `[[patch]]` or a script once its address is known.)
+These discs contain only the executable and a `DUMMY` file in the filesystem; all game data is read by sector number. Use `[[lba]]` entries to overwrite data in place, with `max_sectors` as a safety check. (Relocating larger data needs the game's LBA table, which can be patched with `[[patch]]` or a script once its address is known.) A script can also do it all while it loads with `dwrc.disc` (below): read a file, enlarge it, `append` it past the end of the disc and write the new LBA and size into the game's file table on the disc.
 
 The player's image is never modified; replacements live in a virtual disc built when the game starts.
 
@@ -223,6 +224,34 @@ Scripts run in an isolated, sandboxed Lua 5.4 state per mod (see *Safety*). The 
 | `dwrc.notify(text)` | show a short message over the game picture (1.3+) |
 | `dwrc.show_image(name, file [, opts])` | show a PNG from the mod's folder over the game picture until `dwrc.hide_image(name)`; showing the same `name` again moves or replaces it. `opts`: `corner` (`"top_left"`, the default, `"top_right"`, `"bottom_left"` or `"bottom_right"`), `x` and `y` (distance from that corner's edges, default 4) and `scale` (default 1). Positions and sizes are in pixels of a 320×240 grid laid over the picture, whatever resolution the game uses, so an image keeps its place and size; a 64×64 image at `scale = 0.375` covers 24×24 of the grid. Images up to 256×256 and 1 MiB, 16 per mod (1.4+) |
 | `dwrc.hide_image(name)` | take that image away again (1.4+) |
+| `dwrc.disc.read(lba [, count])` | the 2048 data bytes of `count` sectors (default 1) of the virtual disc, from `lba`, as one string: the player's disc with the changes of the mods loaded before this one (1.6+) |
+| `dwrc.disc.write(lba, data)` | replace sectors of the virtual disc with `data` (padded with zeros to whole sectors) (1.6+) |
+| `dwrc.disc.append(data)` | add `data` after the end of the disc (and anything already added there); returns the LBA it starts at (1.6+) |
+| `dwrc.disc.sectors()` | the disc's size in sectors, added ones included: the next `append` goes there (1.6+) |
+
+| `dwrc.discs.list()` | the player's discs of the games named in `uses_games` that are in the library, as `{game, serial, title}` tables (1.6+) |
+| `dwrc.discs.info(game)` | that game's `{game, serial, title}`, or `nil` when the player hasn't imported it (or it isn't in `uses_games`) (1.6+) |
+| `dwrc.discs.read(game, lba [, count])` | like `dwrc.disc.read`, from the disc the player plays `game` (`"dw1"`, `"dw2"`, `"dw3"`) with, unmodded (1.6+) |
+| `dwrc.discs.sectors(game)` | that disc's size in sectors (1.6+) |
+
+`dwrc.disc` only works in a script's main chunk (not in callbacks): scripts
+load while the virtual disc is built, before the game starts, so a mod can
+read the game's own files from the player's disc, change them or build new
+ones, and write the result to the virtual disc, for instance to point a
+file table at an enlarged file. The player's image is never changed, and a
+mod ships no game data: what it builds comes from the player's disc each
+time the game starts. Reads and writes are limited to 32 MiB at a time.
+
+`dwrc.discs` does the same for **other games the player owns**: a mod that
+lists them in `uses_games` can read their discs while it loads (only read:
+nothing is written to them), for instance to bring a model from Digimon
+World 2003 into Digimon World. Each game's disc is the one the player chose
+for it on the Games page. Players may not have every game, so check
+`dwrc.discs.info(game)` first and do without, or say what's missing with
+`dwrc.notify`. Release numbers differ (file numbers move between the
+European, American and Japanese discs), so find data by `serial` or by
+searching for it rather than by fixed sectors. `dwrc-cli run` takes the
+other discs with `--other-disc <cue|bin>`.
 
 The `ctx` passed to callbacks:
 

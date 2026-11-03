@@ -35,7 +35,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         _ => bail!(
-            "commands:\n  inspect <cue>\n  extract <cue> <path> <out>\n  run <bin|cue> [--bios <bin>] [--frames N] [--shots dir] [--every K] [--fast] [--input frame:button:len,...] [--mod <folder>]... [--card1 F.mcd] [--pal60] [--widescreen 16:9|16:10|21:9 [--widescreen-ui]] [--states DIR] [--trace-bios] [--dump-ram F] [--serve]\n  disasm <exe> <addr> <count>\n  mod validate <folder>              check a mod folder\n  mod pack <folder> [--out <dir>]    build <id>-<version>.zip for a GitHub release\n  mod install <zip> [--data <dir>] [--replace]\n  mod list [--data <dir>]\n  mod index <owner/repo | URL>       read a mod index feed\n  mod releases <owner/repo> <id>     list a mod's installable GitHub releases"
+            "commands:\n  inspect <cue>\n  extract <cue> <path> <out>\n  run <bin|cue> [--bios <bin>] [--frames N] [--shots dir] [--every K] [--fast] [--input frame:button:len,...] [--mod <folder>]... [--other-disc <bin|cue>]... [--card1 F.mcd] [--pal60] [--widescreen 16:9|16:10|21:9 [--widescreen-ui]] [--states DIR] [--trace-bios] [--dump-ram F] [--serve]\n  disasm <exe> <addr> <count>\n  mod validate <folder>              check a mod folder\n  mod pack <folder> [--out <dir>]    build <id>-<version>.zip for a GitHub release\n  mod install <zip> [--data <dir>] [--replace]\n  mod list [--data <dir>]\n  mod index <owner/repo | URL>       read a mod index feed\n  mod releases <owner/repo> <id>     list a mod's installable GitHub releases"
         ),
     }
 }
@@ -123,10 +123,22 @@ fn run(args: &[String]) -> Result<()> {
             enabled.push(dwrc_mods::EnabledMod { info, options, data_dir: std::env::temp_dir().join("dwrc-cli-mod-data") });
         }
     }
+    // Other games' discs for mods with uses_games: --other-disc <cue|bin> (repeatable).
+    let mut others = dwrc_mods::others::OtherDiscs::default();
+    for (i, a) in args.iter().enumerate() {
+        if a == "--other-disc" {
+            let p = dwrc_runtime::library::resolve_disc_path(&PathBuf::from(args.get(i + 1).context("--other-disc needs a disc image")?));
+            let mut d = Disc::open(&p)?;
+            let id = dwrc_disc::identify(&mut d)?.with_context(|| format!("{} is not a recognised disc", p.display()))?;
+            println!("other disc: {} ({})", id.title, id.serial);
+            others.add(id.game, &id.serial, &id.title, move || Ok(Disc::open(&p)?));
+        }
+    }
     let mut mod_rt = {
         let mut ctx = dwrc_mods::disc::DiscContext::new(&mut disc);
-        dwrc_mods::ModRuntime::build(ident.game, &ident.serial, &enabled, &mut ctx)
+        dwrc_mods::ModRuntime::build_with_others(ident.game, &ident.serial, &enabled, &mut ctx, &mut others)
     };
+    drop(others);
     for l in &mod_rt.log {
         println!("mod: {l}");
     }

@@ -68,6 +68,10 @@ pub struct ModSection {
     /// Marked unfinished by its author.
     #[serde(default)]
     pub experimental: bool,
+    /// Other games whose discs the script reads while it loads
+    /// (`dwrc.discs`): `uses_games = ["dw3"]`. Only these are readable.
+    #[serde(default)]
+    pub uses_games: Vec<String>,
 }
 
 /// The closed category vocabulary shared by manifests and mod indexes.
@@ -126,6 +130,11 @@ impl ModSection {
     /// Every game this mod runs on, in library order.
     pub fn games(&self) -> Vec<GameId> {
         GameId::ALL.into_iter().filter(|g| self.supports(*g)).collect()
+    }
+
+    /// The games named by `uses_games` (unknown names are left out).
+    pub fn uses_games(&self) -> Vec<GameId> {
+        GameId::ALL.into_iter().filter(|g| self.uses_games.iter().any(|s| GameId::from_slug(&s.to_ascii_lowercase()) == Some(*g))).collect()
     }
 
     /// The `owner/repo` this mod updates from, if `github` is valid.
@@ -363,6 +372,14 @@ impl ModManifest {
                 Some(r) if r.range.as_deref().is_none_or(crate::version::valid_range) => {}
                 _ => p.push(format!("'{d}' must be a mod id, optionally with @<version range>")),
             }
+        }
+        for g in &self.info.uses_games {
+            if GameId::from_slug(&g.to_ascii_lowercase()).is_none() {
+                p.push(format!("uses_games: '{g}' is not dw1, dw2 or dw3"));
+            }
+        }
+        if !self.info.uses_games.is_empty() && self.info.script.is_none() {
+            p.push("uses_games needs a script (other discs are read with dwrc.discs)".into());
         }
         if let Some(s) = &self.info.script {
             if !root.join(s).is_file() {

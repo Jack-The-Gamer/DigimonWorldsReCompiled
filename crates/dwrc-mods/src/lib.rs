@@ -18,6 +18,7 @@
 
 pub mod disc;
 pub mod manifest;
+pub mod others;
 pub mod overlay;
 pub mod package;
 pub mod patches;
@@ -265,6 +266,12 @@ impl ModRuntime {
     /// Applies disc overrides and loads patches/scripts for `mods` (in
     /// load order: later mods win on conflicts).
     pub fn build(game: GameId, serial: &str, mods: &[EnabledMod], disc_ctx: &mut disc::DiscContext) -> Self {
+        Self::build_with_others(game, serial, mods, disc_ctx, &mut others::OtherDiscs::default())
+    }
+
+    /// [`build`](Self::build), with the player's other discs readable by the
+    /// mods that name their games in `uses_games`.
+    pub fn build_with_others(game: GameId, serial: &str, mods: &[EnabledMod], disc_ctx: &mut disc::DiscContext, others: &mut others::OtherDiscs) -> Self {
         let mut rt = ModRuntime { patches: Vec::new(), scripts: Vec::new(), log: Vec::new() };
         for m in mods.iter() {
             let id = m.info.id().to_string();
@@ -281,7 +288,15 @@ impl ModRuntime {
             }
             if let Some(s) = &m.info.manifest.info.script {
                 let path = m.info.root.join(s);
-                match script::ScriptHost::load(&id, game, serial, &path, m.options.clone(), m.data_dir.clone()) {
+                let uses = m.info.manifest.info.uses_games();
+                for g in &uses {
+                    match others.info(*g) {
+                        Some((s, t)) => rt.log.push(format!("[{id}] can read the {} disc: {t} ({s})", g.slug())),
+                        None => rt.log.push(format!("[{id}] uses {} but no disc for it is in the library", g.slug())),
+                    }
+                }
+                let o = if uses.is_empty() { None } else { Some((&mut *others, uses)) };
+                match script::ScriptHost::load_with_discs(&id, game, serial, &path, m.options.clone(), m.data_dir.clone(), Some(&mut *disc_ctx), o) {
                     Ok(h) => {
                         rt.log.push(format!("[{id}] script loaded"));
                         rt.scripts.push(h);
