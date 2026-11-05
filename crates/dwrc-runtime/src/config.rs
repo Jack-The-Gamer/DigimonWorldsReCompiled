@@ -92,13 +92,15 @@ pub struct CrtConfig {
     pub scanlines: f32,
     /// How strong the red/green/blue phosphor stripes are.
     pub mask: f32,
+    /// How much light spreads through the glass around bright areas.
+    pub glow: f32,
     /// How curved the screen is (0 = flat).
     pub curvature: f32,
 }
 
 impl Default for CrtConfig {
     fn default() -> Self {
-        Self { scanlines: 0.75, mask: 0.4, curvature: 0.5 }
+        Self { scanlines: 0.75, mask: 0.4, glow: 0.3, curvature: 0.5 }
     }
 }
 

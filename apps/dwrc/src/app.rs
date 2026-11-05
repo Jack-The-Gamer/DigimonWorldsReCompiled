@@ -665,6 +665,7 @@ impl App {
                             for (label, value, tip) in [
                                 ("Scanlines", &mut crt.scanlines, "How dark the gaps between the picture's lines are"),
                                 ("Phosphor mask", &mut crt.mask, "How visible the red, green and blue stripes are"),
+                                ("Glow", &mut crt.glow, "Light spreading softly through the glass around bright parts of the picture"),
                                 ("Screen curvature", &mut crt.curvature, "0 is a flat screen"),
                             ] {
                                 ui.label(label).on_hover_text(tip);
@@ -1032,8 +1033,8 @@ impl App {
                     (Filter::Crt, Some(crt)) => {
                         let crt = crt.clone();
                         let c = self.cfg.video.crt;
-                        let params = crate::crt::Params { scanlines: c.scanlines, mask: c.mask, curvature: c.curvature };
-                        let cb = eframe::egui_glow::CallbackFn::new(move |_info, painter| crt.paint(painter.gl(), params));
+                        let params = crate::crt::Params { scanlines: c.scanlines, mask: c.mask, glow: c.glow, curvature: c.curvature };
+                        let cb = eframe::egui_glow::CallbackFn::new(move |info, painter| crt.paint(painter, &info, params));
                         ui.painter().add(egui::PaintCallback { rect, callback: Arc::new(cb) });
                     }
                     _ => {
