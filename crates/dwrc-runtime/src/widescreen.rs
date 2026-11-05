@@ -206,7 +206,7 @@ fn find_scroll_limits(exe: &PsxExe) -> Option<(u32, [ScrollAxis; 2])> {
 /// (black). Hooks the game's scroll limits to stop the scroll the
 /// widescreen margin earlier, while widescreen is on; with it off the game's
 /// own code runs. Returns whether the executable has the function.
-pub fn install_scroll_limits(psx: &mut Psx, game: GameId, exe: &PsxExe) -> bool {
+fn install_scroll_limits(psx: &mut Psx, game: GameId, exe: &PsxExe) -> bool {
     if game != GameId::Dw1 {
         return false;
     }
@@ -230,6 +230,175 @@ pub fn install_scroll_limits(psx: &mut Psx, game: GameId, exe: &PsxExe) -> bool 
         }),
     );
     true
+}
+
+/// Digimon World 1's field background loop (in `0x800D5920..0x800D5AEC` on
+/// SLUS-01032), from where it has set a tile's quad (`0x800D5A64`), as
+/// `(word, mask)` like `DW1_SCROLL_LIMITS`; `jal` targets masked too.
+///
+/// A field's map is a grid of 128×128 tiles, all in RAM (8 bits per pixel,
+/// one palette), and a table holds a 20-byte entry per tile: pixels' address
+/// (+0), map x and y (+6, +8), VRAM x and y (+10, +12: the tile's place in a
+/// ring of 4 columns × 3 rows at VRAM x 768..1023), texture page (+14) and
+/// CLUT (+16); a byte per tile before the table says whether it has a picture
+/// (-1: drawn black). Every picture the loop draws a window of 4 columns × 3
+/// rows of tiles from the ring, one quad each (`s0` the packet, `s2` the
+/// tile, `s3` its column in the window of `s5`). Four columns are 512 pixels
+/// and the screen 320, so a wide picture (426 at 16:9) often reaches past
+/// the window's first or last column, where VRAM has no tile.
+const DW1_FIELD_TILES: [(u32, u32); 34] = {
+    const F: u32 = 0xFFFF_FFFF;
+    const A: u32 = 0xFFFF_0000;
+    const J: u32 = 0xFC00_0000;
+    [
+        (0x3C020000, A), (0x24420000, A), (0x00511021, F), (0x84420000, F), (0x3C010000, A), (0xA6020016, F), (0x3C020000, A), (0x24420000, A),
+        (0x00511021, F), (0x84420000, F), (0x02003821, F), (0xA602000E, F), (0x84250000, A), (0x3C020000, A), (0x3C010000, A), (0x24420000, A),
+        (0x84260000, A), (0x0C000000, J), (0x00512021, F), (0x02C02021, F), (0x0C000000, J), (0x02002821, F), (0x26100028, F), (0x0C000000, J),
+        (0x02002021, F), (0x22730001, F), (0x22520001, F), (0x0275082A, F), (0x1420FF9C, F), (0x00000000, F), (0x22940001, F), (0x2A810003, F),
+        (0x1420FF8E, F), (0x00000000, F),
+    ]
+};
+
+/// Where Digimon World 1's field tiles are: the hook address (after a quad
+/// is set, before it is added to the drawing list), the tile table and the
+/// table of which tiles have a picture.
+fn find_field_tiles(exe: &PsxExe) -> Option<(u32, u32, u32)> {
+    let words: Vec<u32> = exe.text.chunks_exact(4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+    let at = words.windows(DW1_FIELD_TILES.len()).position(|w| w.iter().zip(&DW1_FIELD_TILES).all(|(&x, &(want, mask))| x & mask == want))?;
+    let abs = |hi: u32, lo: u32| ((hi & 0xFFFF) << 16).wrapping_add(lo as u16 as i16 as i32 as u32);
+    let table = abs(words[at + 13], words[at + 15]);
+    // The picture check, earlier in the loop: `lui v0, hi; addiu v0, v0, lo; addu v0, v0, s2; lb v0, 0(v0)`.
+    let p = at.checked_sub(66)?;
+    let ok = words[p] & 0xFFFF_0000 == 0x3C02_0000 && words[p + 1] & 0xFFFF_0000 == 0x2442_0000 && words[p + 2] == 0x0052_1021 && words[p + 3] == 0x8042_0000;
+    let has = abs(words[p], words[p + 1]);
+    (ok && has < table).then(|| (exe.load_addr + 4 * (at as u32 + 19), table, has))
+}
+
+/// Digimon World 1's field map, as `install_field_tiles` sees it.
+struct FieldTiles {
+    /// The tile table and the "has a picture" bytes (see `DW1_FIELD_TILES`).
+    table: u32,
+    has: u32,
+    /// Tiles the table has room for.
+    tiles: u32,
+    /// The map's tiles as last seen whole in RAM (VRAM halfwords, 64×128 each).
+    copy: Vec<Option<Vec<u16>>>,
+}
+
+impl FieldTiles {
+    fn entry(&self, n: u32) -> u32 {
+        self.table + 20 * n
+    }
+
+    /// Tile `n`'s pixels in RAM, while RAM still holds the map: a battle
+    /// loads over it (the game goes on drawing from VRAM). Each tile's pixels
+    /// come after its place on the map (`y << 16 | x / 2`), and the next
+    /// tile's after them, so both places must be there.
+    fn in_ram(&self, bus: &dwrc_psx::Bus, n: u32) -> Option<Vec<u16>> {
+        if n >= self.tiles || bus.peek8(self.has + n) as i8 == -1 {
+            return None;
+        }
+        let place = |e: u32| (bus.peek16(e + 8) as u32) << 16 | bus.peek16(e + 6) as u32 / 2;
+        let at = (bus.peek32(self.entry(n)) & 0x1F_FFFF) as usize;
+        if at < 4 || at + 128 * 128 + 4 > bus.ram.len() {
+            return None;
+        }
+        let word = |a: usize| u32::from_le_bytes([bus.ram[a], bus.ram[a + 1], bus.ram[a + 2], bus.ram[a + 3]]);
+        if word(at - 4) != place(self.entry(n)) {
+            return None;
+        }
+        let next = self.entry(n + 1);
+        if n + 1 < self.tiles && (bus.peek32(next) & 0x1F_FFFF) as usize == at + 128 * 128 + 4 && word(at + 128 * 128) != place(next) {
+            return None;
+        }
+        Some(bus.ram[at..at + 128 * 128].chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect())
+    }
+
+    /// Copies every tile RAM holds.
+    fn take_copy(&mut self, bus: &dwrc_psx::Bus) {
+        self.copy = (0..self.tiles).map(|n| self.in_ram(bus, n)).collect();
+    }
+}
+
+/// VRAM `rect` (x, y, width, height), row by row.
+fn vram_rect(bus: &dwrc_psx::Bus, [x, y, w, h]: [u32; 4]) -> Vec<u16> {
+    (y..y + h).flat_map(|r| bus.gpu.vram[(r * 1024 + x) as usize..][..w as usize].iter().copied()).collect()
+}
+
+/// Draws the tiles beside Digimon World 1's field window in the widescreen
+/// margins (see `DW1_FIELD_TILES`): when the loop sets the quad of a tile in
+/// the window's first (last) column, the GPU is given the tile to its left
+/// (right) on the map, to draw beside that quad when it draws it. The tiles
+/// come from RAM while it holds the map (the tile being drawn is the same
+/// there as in VRAM), else from a copy of the map taken then, if the copy's
+/// tile is the one in VRAM (in battle). Only the host's picture changes: the
+/// console runs as without it.
+fn install_field_tiles(psx: &mut Psx, exe: &PsxExe) -> bool {
+    let Some((addr, table, has)) = find_field_tiles(exe) else {
+        log::warn!("widescreen: Digimon World 1's field tiles not found; the field's sides may be black in places");
+        return false;
+    };
+    let mut map = FieldTiles { table, has, tiles: table - has, copy: Vec::new() };
+    psx.bus.add_hook(
+        addr,
+        Box::new(move |cpu, bus| {
+            if bus.gpu.widescreen().is_none() {
+                return HookAction::Continue;
+            }
+            let (packet, tile, col, cols) = (cpu.regs[16], cpu.regs[18], cpu.regs[19], cpu.regs[21]);
+            let edges = [(-1i32, col == 0), (1, col + 1 == cols)];
+            if tile >= map.tiles || !edges.iter().any(|e| e.1) {
+                return HookAction::Continue;
+            }
+            let e = map.entry(tile);
+            let (x, y) = (bus.peek16(e + 6) as i16, bus.peek16(e + 8) as i16);
+            let rect = [bus.peek16(e + 10) as u32, bus.peek16(e + 12) as u32, 64, 128];
+            if rect[0] + 64 > 1024 || rect[1] + 128 > 512 {
+                return HookAction::Continue;
+            }
+            let shown = vram_rect(bus, rect);
+            let ram_ok = map.in_ram(bus, tile).is_some_and(|t| t == shown);
+            for (side, edge) in edges {
+                let n = tile.wrapping_add(side as u32);
+                if !edge || n >= map.tiles {
+                    continue;
+                }
+                // The neighbour on the same row of the map.
+                let (nx, ny) = (bus.peek16(map.entry(n) + 6) as i16, bus.peek16(map.entry(n) + 8) as i16);
+                if ny != y || nx as i32 - x as i32 != 128 * side {
+                    continue;
+                }
+                let copied = |m: &FieldTiles, i: u32, want: &Vec<u16>| m.copy.get(i as usize).and_then(|c| c.as_ref()) == Some(want);
+                // RAM's tile (copying the map again when the copy is of another
+                // map), else the copy's, when it is of this map.
+                let texels = match ram_ok.then(|| map.in_ram(bus, n)).flatten() {
+                    Some(t) => {
+                        if !copied(&map, tile, &shown) || !copied(&map, n, &t) {
+                            map.take_copy(bus);
+                        }
+                        t
+                    }
+                    None if copied(&map, tile, &shown) => match map.copy.get(n as usize) {
+                        Some(Some(t)) => t.clone(),
+                        _ => continue,
+                    },
+                    None => continue,
+                };
+                bus.gpu.add_wide_beside(packet, dwrc_psx::gpu::Beside { dx: 128 * side, rect, texels });
+            }
+            HookAction::Continue
+        }),
+    );
+    true
+}
+
+/// Installs what widescreen needs in a game's own code: Digimon World 1's
+/// field scroll limits and field tiles. Both do nothing while widescreen is off.
+pub fn install_hooks(psx: &mut Psx, game: GameId, exe: &PsxExe) {
+    if game == GameId::Dw1 {
+        install_scroll_limits(psx, game, exe);
+        install_field_tiles(psx, exe);
+    }
 }
 
 /// The middle `keep` columns of a frame (a widescreen frame cut to 4:3).

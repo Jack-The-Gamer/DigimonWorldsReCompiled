@@ -166,7 +166,7 @@ fn run(args: &[String]) -> Result<()> {
         }
     }
     // Widescreen keeps Digimon World 1's field scroll inside the map (on or off at any time).
-    dwrc_runtime::widescreen::install_scroll_limits(&mut psx, ident.game, &exe);
+    dwrc_runtime::widescreen::install_hooks(&mut psx, ident.game, &exe);
     // --widescreen 16:9: side strips beside the picture (frames come out wider).
     if let Some(w) = opt(args, "--widescreen") {
         let w = dwrc_runtime::config::Widescreen::parse(w).context("--widescreen takes off, 16:9, 16:10 or 21:9")?;

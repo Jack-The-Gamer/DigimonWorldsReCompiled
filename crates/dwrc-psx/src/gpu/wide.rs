@@ -246,6 +246,12 @@ impl Canvas {
             }
         }
         self.drawn.clear();
+        // A piece of an earlier picture that this one drew something else over
+        // is gone (a menu page switched to another: its text would join the new
+        // page's for a few pictures). Drawn again, it finds its move in `seen`.
+        let new: Vec<[i32; 4]> = self.boxes.iter().filter(|(_, age, _)| *age == 0).map(|(b, _, _)| *b).collect();
+        let overlaps = |a: &[i32; 4], b: &[i32; 4]| a[0] <= b[1] && b[0] <= a[1] && a[2] <= b[3] && b[2] <= a[3];
+        self.boxes.retain(|(b, age, _)| *age == 0 || !new.iter().any(|n| overlaps(n, b)));
         for (_, age, _) in &mut self.boxes {
             *age += 1;
         }
@@ -338,6 +344,21 @@ fn anchored_groups(items: &[([i32; 4], u64)], width: i32, margin: i32) -> Vec<([
         };
         out.push((g, dx, span));
         held.push(holder);
+    }
+    // A group that would go to an edge but sits against a window across the
+    // screen drawn before it (a tab on top of a menu window, a label on its
+    // edge) stays with the window. HUD the window is drawn over keeps its own place.
+    let against = |a: &[i32; 4], b: &[i32; 4]| a[0] <= b[1] + 2 && b[0] <= a[1] + 2 && a[2] <= b[3] + 2 && b[2] <= a[3] + 2;
+    for i in 0..out.len() {
+        let (g, dx, _) = out[i];
+        if dx == 0 || held[i].is_some() {
+            continue;
+        }
+        let window = out.iter().enumerate().filter(|&(j, (h, _, _))| j != i && spans(h) && first[h] < first[&g] && against(h, &g)).max_by_key(|(_, (h, _, _))| size(h));
+        if let Some((_, &(_, hdx, hs))) = window {
+            out[i].1 = hdx;
+            out[i].2 = hs;
+        }
     }
     // A group near neither edge that overlaps or sits beside a group being
     // moved (an icon sticking out of its bar, the HP box beside a name, a
@@ -445,7 +466,26 @@ pub(super) struct Wide {
     canvases: Vec<Canvas>,
     clock: u64,
     seen: Remembered,
+    /// Pictures to draw beside primitives not drawn yet, by DMA packet
+    /// address, with the vblanks since each was given.
+    beside: Vec<(u32, u32, Beside)>,
 }
+
+/// A picture beside a primitive, in the margins only: the primitive drawn
+/// again moved `dx` columns, with VRAM `rect` (x, y, width, height in
+/// halfwords) holding `texels` while it is drawn. For a game that keeps only
+/// part of a big picture in VRAM, drawing what lies past the part it shows
+/// (Digimon World 1's field backgrounds: four columns of tiles in VRAM, the
+/// whole map in RAM). VRAM is put back right after; the console never sees it.
+#[derive(Debug, Clone)]
+pub struct Beside {
+    pub dx: i32,
+    pub rect: [u32; 4],
+    pub texels: Vec<u16>,
+}
+
+/// Vblanks a picture given for a primitive waits for it to be drawn.
+const BESIDE_WAIT: u32 = 8;
 
 /// How to draw a piece in the second pass: up to two (move, clip) pairs;
 /// the clip is a column range, in area coordinates or (from `side_begin`)
@@ -505,6 +545,44 @@ impl Gpu {
     pub fn clear_widescreen(&mut self) {
         if let Some(w) = &mut self.wide {
             w.canvases.clear();
+            w.beside.clear();
+        }
+    }
+
+    /// Draws `b` beside the primitive in the DMA packet at `packet` (a RAM
+    /// address) when the game draws it, if widescreen is on (see `Beside`).
+    pub fn add_wide_beside(&mut self, packet: u32, b: Beside) {
+        let Some(w) = &mut self.wide else { return };
+        let packet = 0x8000_0000 | (packet & 0x1F_FFFC);
+        let [x, y, bw, bh] = b.rect;
+        if b.texels.len() != (bw * bh) as usize || x + bw > VRAM_W as u32 || y + bh > VRAM_H as u32 {
+            return;
+        }
+        w.beside.retain(|(p, _, o)| !(*p == packet && o.dx == b.dx));
+        if w.beside.len() < 64 {
+            w.beside.push((packet, 0, b));
+        }
+    }
+
+    /// The pictures to draw beside the primitive being drawn (from its packet).
+    pub(super) fn take_beside(&mut self) -> Vec<Beside> {
+        let packet = self.packet_addr;
+        match &mut self.wide {
+            Some(w) if packet != 0 && w.beside.iter().any(|(p, _, _)| *p == packet) => {
+                let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut w.beside).into_iter().partition(|(p, _, _)| *p == packet);
+                w.beside = rest;
+                mine.into_iter().map(|(_, _, b)| b).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Swaps VRAM `rect` with `texels` (twice puts it back).
+    pub(super) fn swap_vram(&mut self, rect: [u32; 4], texels: &mut [u16]) {
+        let [x, y, w, _] = rect;
+        for (r, row) in texels.chunks_exact_mut(w as usize).enumerate() {
+            let at = (y as usize + r) * VRAM_W + x as usize;
+            self.vram[at..at + w as usize].swap_with_slice(row);
         }
     }
 
@@ -655,6 +733,10 @@ impl Gpu {
             for c in w.canvases.iter_mut().filter(|c| c.full) {
                 c.regroup(&mut w.seen);
             }
+            for (_, age, _) in &mut w.beside {
+                *age += 1;
+            }
+            w.beside.retain(|(_, age, _)| *age <= BESIDE_WAIT);
         }
     }
 
@@ -883,9 +965,69 @@ mod tests {
     }
 
     #[test]
+    fn a_tab_on_a_window_stays_with_it() {
+        // Digimon World 1's Digimon menu: a window across the screen, then a tab
+        // label above its top edge near the left (its tab is not UI) and a label
+        // on that edge, drawn later and touching the tab label.
+        let g = anchored_groups(&[([14, 305, 34, 220], 1), ([22, 83, 19, 32], 2), ([18, 79, 33, 46], 30)], 320, 53);
+        assert!(g.iter().all(|(_, dx, _)| *dx == 0), "{g:?}");
+        // HUD at the left edge that the window is drawn over still goes to the edge.
+        let g = anchored_groups(&[([12, 307, 33, 125], 2), ([17, 53, 20, 34], 1)], 320, 53);
+        assert_eq!(g.iter().find(|(b, _, _)| b[0] == 17).unwrap().1, -53);
+    }
+
+    #[test]
+    fn a_picture_beside_a_primitive_goes_in_the_margin() {
+        let mut gpu = Gpu::new(crate::VideoStandard::Ntsc);
+        gpu.set_widescreen(Some((4, 3)));
+        for v in [0xE300_0000, 0xE400_0000 | 239 << 10 | 319, 0xE500_0000] {
+            gpu.gp0(v);
+        }
+        // An 8-bit texture at VRAM x 768 (index 1, red), and its CLUT at row 480 (2: blue).
+        for y in 0..128 {
+            gpu.vram[y * VRAM_W + 768..][..64].fill(0x0101);
+        }
+        gpu.vram[480 * VRAM_W + 1] = 0x001F;
+        gpu.vram[480 * VRAM_W + 2] = 0x7C00;
+        // A quad 100 wide from x -20, and beside it to the left the same texture all index 2.
+        gpu.add_wide_beside(0x1000, Beside { dx: -100, rect: [768, 0, 64, 128], texels: vec![0x0202; 64 * 128] });
+        gpu.packet_addr = 0x8000_1000;
+        let xy = |x: i32, y: i32| (y as u32) << 16 | (x as u32 & 0x7FF);
+        for v in [0x2C80_8080, xy(-20, 10), 0x7800 << 16, xy(80, 10), 0x8C << 16 | 100, xy(-20, 110), 100 << 8, xy(80, 110), 100 << 8 | 100] {
+            gpu.gp0(v);
+        }
+        gpu.packet_addr = 0;
+        let (_, row) = gpu.wide_row(0, 0, 320, 53).unwrap();
+        let r = row(20);
+        // Margin columns: 0..=32 beside (x -120..-21, from x -53), 33..=52 the quad's own part.
+        assert!(r[..33].iter().all(|&p| p & 0x7FFF == 0x7C00), "{:?}", &r[..53]);
+        assert!(r[33..53].iter().all(|&p| p & 0x7FFF == 0x001F), "{:?}", &r[..53]);
+        // VRAM is as the game left it, and the picture was used once.
+        assert!(gpu.vram[768..832].iter().all(|&p| p == 0x0101));
+        assert!(gpu.wide.as_ref().unwrap().beside.is_empty());
+    }
+
+    #[test]
+    fn pieces_drawn_over_are_forgotten() {
+        let mut c = Canvas { x1: 0, y1: 0, x2: 319, y2: 239, margin: 53, px: Vec::new(), used: 0, full: true, stretch: false, boxes: Vec::new(), seq: 0, groups: Vec::new(), drawn: Vec::new() };
+        let mut seen = Remembered::new();
+        // A menu page: a window across the screen, a line of text in it near the left.
+        c.ui_shift([14, 305, 34, 220], false, &seen);
+        c.ui_shift([18, 120, 60, 72], false, &seen);
+        c.regroup(&mut seen);
+        // The next page: the window and other text, at the edge of the first's.
+        c.ui_shift([14, 305, 34, 220], false, &seen);
+        c.ui_shift([10, 60, 70, 82], false, &seen);
+        c.regroup(&mut seen);
+        assert!(!c.boxes.iter().any(|(b, _, _)| *b == [18, 120, 60, 72]));
+        assert_eq!(c.boxes.len(), 2);
+    }
+
+    #[test]
     fn text_moves_with_its_panel() {
         // A panel near the left edge, and its text (not near the edge) inside it.
         let g = anchored_groups(&[([8, 156, 15, 58], 1), ([60, 120, 20, 32], 2)], 320, 53);
         assert!(g.iter().all(|(_, dx, _)| *dx == -53));
     }
 }
+

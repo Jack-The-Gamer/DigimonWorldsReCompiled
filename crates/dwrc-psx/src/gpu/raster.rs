@@ -220,6 +220,7 @@ impl Gpu {
             && verts.iter().filter(|v| v.x == xmax).count() == 2
             && (!prim.textured || self.flat_texture(&verts, &prim));
         let ui = self.is_ui(textured, shaded, true, layer, clut, (xmax - xmin + 1, ymax - ymin + 1));
+        let drawn = verts;
         if let Some(draws) = self.side_begin(if layer { self.draw_x1 - 1 } else { xmin }, xmax, ymin, ymax, ui, semi) {
             if layer {
                 let (lo, hi) = self.side.as_ref().map(|s| (s.lo, s.hi)).unwrap();
@@ -240,6 +241,28 @@ impl Gpu {
                 }
             }
             self.side_end();
+        }
+        // Widescreen: pictures beside this one, in the margins only, with
+        // texels the game has no room for in VRAM (see `wide::Beside`).
+        if self.wide.is_some() && self.packet_addr != 0 {
+            for mut b in self.take_beside() {
+                self.swap_vram(b.rect, &mut b.texels);
+                if self.side_begin(xmin + b.dx, xmax + b.dx, ymin, ymax, false, semi).is_some() {
+                    if let Some(s) = &mut self.side {
+                        s.full = false;
+                    }
+                    let mut v = drawn;
+                    for p in v.iter_mut() {
+                        p.x += b.dx;
+                    }
+                    self.draw_triangle([v[0], v[1], v[2]], &prim);
+                    if quad {
+                        self.draw_triangle([v[1], v[2], v[3]], &prim);
+                    }
+                    self.side_end();
+                }
+                self.swap_vram(b.rect, &mut b.texels);
+            }
         }
     }
 

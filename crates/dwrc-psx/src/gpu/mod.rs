@@ -5,7 +5,7 @@ mod raster;
 mod wide;
 
 pub use wide::margin as widescreen_margin;
-pub use wide::UiRules;
+pub use wide::{Beside, UiRules};
 
 use crate::irq::{Interrupt, Irq};
 use crate::timers::TimerGpuInfo;
