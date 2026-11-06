@@ -247,7 +247,7 @@ fn run(args: &[String]) -> Result<()> {
         std::fs::create_dir_all(d)?;
     }
     if flag(args, "--serve") {
-        serve(&mut psx, &mut mod_rt, &script, &states, ident.game)?;
+        serve(&mut psx, &mut mod_rt, &script, &states, &ident)?;
         for (slot, path) in &card_paths {
             if let Some(c) = &psx.bus.sio.cards[*slot] {
                 std::fs::write(path, &c.data)?;
@@ -383,13 +383,18 @@ fn run(args: &[String]) -> Result<()> {
 /// cd                               what the CD-ROM drive is doing (mode, XA-ADPCM)
 /// watch <addr> / unwatch           note each change of the word at addr (and the instruction) until unwatch
 /// wav <file> <frames> [BTN[+BTN]]  run frames (buttons held) and save their audio
+/// click <x> <y> [right]            a mouse click on the picture (display pixels); `wait` to let it act
+/// mouse on|off                     mouse support (on with the first click)
 /// frame                            print the frame number
 /// quit
 /// ```
 /// Every command answers with a line starting `ok` or `err`; messages from
 /// mods and save states follow it after ` | `.
-fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button, u64)], states: &dwrc_runtime::savestate::StateStore, game: dwrc_disc::GameId) -> Result<()> {
+fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button, u64)], states: &dwrc_runtime::savestate::StateStore, ident: &dwrc_disc::Identification) -> Result<()> {
     use std::io::{BufRead, Write};
+    let game = ident.game;
+    // Mouse support, from the first `click` (or `mouse on`).
+    let mouse: std::cell::RefCell<Option<dwrc_runtime::mouse::Mouse>> = std::cell::RefCell::new(None);
     let num = |s: &str| -> Result<u32> {
         let s = s.trim();
         Ok(match s.strip_prefix("0x") {
@@ -415,6 +420,9 @@ fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button
                 state.set(*b, true);
             }
         }
+        if let Some(m) = mouse.borrow_mut().as_mut() {
+            state.buttons |= m.buttons();
+        }
         state.buttons = mods.filter_input(state.buttons);
         psx.bus.sio.pads[0].state = state;
         mods.apply_speed(psx);
@@ -437,6 +445,9 @@ fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button
         mods.on_frame(psx, *frame);
         notes.extend(dwrc_runtime::savestate::handle_requests(states, psx, mods, &mut false));
         notes.extend(mods.take_notices());
+        if let Some(m) = mouse.borrow_mut().as_mut() {
+            m.after_frame(psx);
+        }
         audio.clear();
         psx.bus.spu.take_output(&mut audio);
         if let Some(r) = recording.borrow_mut().as_mut() {
@@ -502,7 +513,30 @@ fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button
             }
             ["loadstate", n] => {
                 states.load(psx, num(n)?)?;
+                if let Some(m) = mouse.borrow_mut().as_mut() {
+                    m.reset();
+                }
                 Ok(format!("loaded slot {n}"))
+            }
+            ["mouse", on] => {
+                let mut m = mouse.borrow_mut();
+                match (*on == "on", m.take()) {
+                    (true, None) => *m = Some(dwrc_runtime::mouse::Mouse::new(psx, ident).context("no mouse rules for this game")?),
+                    (true, old) => *m = old,
+                    (false, Some(old)) => old.remove(psx),
+                    (false, None) => {}
+                }
+                Ok(format!("mouse {on}"))
+            }
+            ["click", x, y, rest @ ..] => {
+                let mut m = mouse.borrow_mut();
+                if m.is_none() {
+                    *m = Some(dwrc_runtime::mouse::Mouse::new(psx, ident).context("no mouse rules for this game")?);
+                }
+                let d = psx.bus.gpu.latched;
+                let c = dwrc_runtime::mouse::Click { right: rest.first() == Some(&"right"), x: num(x)? as i32, y: num(y)? as i32, width: d.width as i32, height: d.height as i32 };
+                m.as_mut().unwrap().click(c);
+                Ok(format!("click {} {}{}", c.x, c.y, if c.right { " right" } else { "" }))
             }
             ["shot", path] => {
                 let mut buf = Vec::new();

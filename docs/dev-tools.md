@@ -55,6 +55,7 @@ frame number, and `--mod` folders run as usual.
 | `poke8` / `poke16` / `poke32 ADDR VALUE` | write memory |
 | `key [shift+\|ctrl+\|alt+]KEY` | a key press for mods (`dwrc.on_key`), e.g. `key shift+1` |
 | `savestate N` / `loadstate N` | save the console to slot N, or load it |
+| `click X Y [right]` | a mouse click on the picture at display pixel (X, Y), as the launcher sends it (mouse support, `dwrc-runtime`'s `mouse`; it starts with the first click, `mouse off` stops it): `wait` afterwards to let it press its buttons. With `RUST_LOG=dwrc_runtime::mouse=debug` each click logs what it found (the cursor's box, the battle line) |
 | `widescreen off\|16:9\|16:10\|21:9 [ui]` | switch the widescreen side strips, with `ui` Widescreen UI (it stays across `loadstate`; the picture fills from the next frames drawn) |
 | `gpulog N FILE` | run N frames and write every primitive drawn: frame, DMA packet address, GP0 command, x0 x1 y0 y1 in VRAM, drawing area, CLUT<<16\|texture page, widescreen move (`-`: none); copies as command `80` with the source in the texture field; a `display X Y` line per frame. Watch a packet address to find the code that builds it; group by texture page and CLUT row to tell a game's UI from its scenery |
 | `pcs N [LO HI]` | run N frames and list the 40 addresses where the CPU spent most time (sampled every 57 cycles), optionally only between `LO` and `HI`: a quick way to find the code behind what's on screen |

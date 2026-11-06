@@ -825,6 +825,29 @@ impl Gpu {
         }
     }
 
+    /// Widescreen UI: where the game put what is shown at `x, y` (display
+    /// pixels from the top left of the console's own picture; the margins lie
+    /// outside it), its column: UI moved out towards an edge is moved back.
+    /// For mouse support, so that a click on a moved menu reaches the menu
+    /// where the game has it. Without Widescreen UI, `x` itself.
+    pub fn ui_origin(&self, x: i32, y: i32) -> i32 {
+        let d = self.latched;
+        let Some(w) = self.wide.as_ref().filter(|w| w.ui.is_some()) else { return x };
+        let Some(c) = w.canvases.iter().find(|c| c.full && c.x1 == d.x as i32 && c.y1 <= d.y as i32 && d.y as i32 <= c.y2) else { return x };
+        let (m, ay) = (c.margin, y + d.y as i32 - c.y1);
+        let at = |g: &[i32; 4], dx: i32| x >= g[0] + dx && x <= g[1] + dx && ay >= g[2] && ay <= g[3];
+        for (g, dx, split) in &c.groups {
+            match split {
+                // A stretched group: its halves moved to the edges, its middle in place.
+                Some(s) if at(&[g[0], s - 1, g[2], g[3]], -m) => return x + m,
+                Some(s) if at(&[*s, g[1], g[2], g[3]], m) => return x - m,
+                None if *dx != 0 && at(g, *dx) => return x - dx,
+                _ => {}
+            }
+        }
+        x
+    }
+
     /// The canvas row beside (and, with Widescreen UI, under) the display at
     /// `x, y`, `width` wide with `margin` columns each side: (row pixels,
     /// whole row) per row, `None` without a matching canvas.

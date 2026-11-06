@@ -43,6 +43,8 @@ pub struct Session {
     notices: Vec<String>,
     /// Images the mods show over the picture, when they changed.
     overlays: Option<Vec<dwrc_mods::overlay::Overlay>>,
+    /// Mouse support (`None`: switched off, or no rules for this game).
+    mouse: Option<crate::mouse::Mouse>,
 }
 
 /// Information shown before starting (so the UI can explain problems).
@@ -135,6 +137,7 @@ impl Session {
         let widescreen = if crate::widescreen::supported(game) { cfg.video.widescreen } else { Widescreen::Off };
         crate::widescreen::install_hooks(&mut psx, game, &exe);
         crate::widescreen::apply(&mut psx, game, widescreen, cfg.video.widescreen_ui);
+        let mouse = if cfg.input.mouse { crate::mouse::Mouse::new(&mut psx, &ident) } else { None };
         log::info!(
             "starting {} ({}) with the {} engine and the {bios_name} BIOS{}{}",
             ident.title,
@@ -162,11 +165,16 @@ impl Session {
             states,
             notices: Vec::new(),
             overlays: None,
+            mouse,
         })
     }
 
     pub fn set_pad(&mut self, port: usize, mut state: PadState) {
         if port == 0 {
+            // The mouse's presses join the keyboard's and the gamepad's.
+            if let Some(m) = &mut self.mouse {
+                state.buttons |= m.buttons();
+            }
             state.buttons = self.mods.filter_input(state.buttons);
         }
         self.psx.bus.sio.pads[port].state = state;
@@ -181,6 +189,9 @@ impl Session {
         self.frame += 1;
         self.mods.on_frame(&mut self.psx, self.frame);
         self.after_mods();
+        if let Some(m) = &mut self.mouse {
+            m.after_frame(&mut self.psx);
+        }
         let c = self.psx.bus.cycles;
         let dc = c - self.last_frame_cycles;
         self.last_frame_cycles = c;
@@ -209,7 +220,29 @@ impl Session {
         if loaded {
             // The console's clock went back (or forward) with the state.
             self.last_frame_cycles = self.psx.bus.cycles;
+            if let Some(m) = &mut self.mouse {
+                m.reset();
+            }
         }
+    }
+
+    /// Switches mouse support on or off.
+    pub fn set_mouse(&mut self, on: bool) {
+        match (on, self.mouse.take()) {
+            (true, None) => self.mouse = crate::mouse::Mouse::new(&mut self.psx, &self.ident),
+            (true, m) => self.mouse = m,
+            (false, Some(m)) => m.remove(&mut self.psx),
+            (false, None) => {}
+        }
+    }
+
+    /// A click on the picture: `u`, `v` from 0 to 1 across the console's
+    /// own 4:3 picture (outside it beside it, with widescreen).
+    pub fn click(&mut self, right: bool, u: f32, v: f32) {
+        let Some(m) = &mut self.mouse else { return };
+        let d = self.psx.bus.gpu.latched;
+        let (w, h) = (d.width.max(1) as i32, d.height.max(1) as i32);
+        m.click(crate::mouse::Click { right, x: (u * w as f32).floor() as i32, y: (v * h as f32).floor() as i32, width: w, height: h });
     }
 
     /// Messages for the screen since the last call.
@@ -278,6 +311,9 @@ impl Session {
     pub fn reset(&mut self) {
         self.flush_memcards();
         self.psx.reset();
+        if let Some(m) = &mut self.mouse {
+            m.reset();
+        }
     }
 
     pub fn shutdown(&mut self) {

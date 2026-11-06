@@ -152,6 +152,9 @@ impl Default for EmulationConfig {
 #[serde(default)]
 pub struct InputConfig {
     pub keyboard: BTreeMap<String, String>,
+    /// Mouse support: clicks on the picture press the buttons for what was
+    /// clicked (see `mouse`), alongside the keyboard and gamepad.
+    pub mouse: bool,
 }
 
 impl Default for InputConfig {
@@ -172,7 +175,7 @@ impl Default for InputConfig {
             ("R1", "D"),
             ("R2", "E"),
         ];
-        Self { keyboard: pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect() }
+        Self { keyboard: pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(), mouse: true }
     }
 }
 

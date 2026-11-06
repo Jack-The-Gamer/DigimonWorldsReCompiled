@@ -60,6 +60,11 @@ pub enum EmuCmd {
     Key { key: String, shift: bool, ctrl: bool, alt: bool },
     /// The widescreen settings changed (shape, Widescreen UI).
     Widescreen(Widescreen, bool),
+    /// Mouse support switched on or off.
+    Mouse(bool),
+    /// A click on the picture: `u`, `v` from 0 to 1 across the console's
+    /// 4:3 picture.
+    Click { right: bool, u: f32, v: f32 },
 }
 
 pub struct EmuHandle {
@@ -158,6 +163,8 @@ fn run(
                     audio.clear();
                 }
                 EmuCmd::Key { key, shift, ctrl, alt } => session.key(&key, shift, ctrl, alt),
+                EmuCmd::Mouse(on) => session.set_mouse(on),
+                EmuCmd::Click { right, u, v } => session.click(right, u, v),
                 EmuCmd::Widescreen(w, ui) => {
                     session.set_widescreen(w, ui);
                     let mut st = sh.status.lock().unwrap();

@@ -846,9 +846,19 @@ impl App {
                             }
                         }
                     });
+                    let mouse = self.cfg.input.mouse;
+                    ui.checkbox(&mut self.cfg.input.mouse, "Mouse").on_hover_text(
+                        "Click the game's picture to play: left clicks pick what you click (menu options, tabs, battle commands) or press Confirm, right clicks open the menu or go back. Digimon World 1 and Digimon World 2003. The keyboard and gamepad keep working alongside it.",
+                    );
                     if ui.button("Reset to defaults").clicked() {
                         self.cfg.input = Default::default();
                         changed = true;
+                    }
+                    if self.cfg.input.mouse != mouse {
+                        changed = true;
+                        if let Some(e) = &self.emu {
+                            e.send(EmuCmd::Mouse(self.cfg.input.mouse));
+                        }
                     }
                 });
                 section(ui, "Data", |ui| {
@@ -1009,6 +1019,8 @@ impl App {
                 }
             }
         }
+        // Clicks on the picture for mouse support (u, v across its 4:3 part).
+        let mut clicks: Vec<(bool, f32, f32)> = Vec::new();
         egui::CentralPanel::default().frame(egui::Frame::default().fill(Color32::BLACK)).show(ctx, |ui| {
             let avail = ui.max_rect();
             let mut image_rects = Vec::new();
@@ -1044,6 +1056,22 @@ impl App {
                 // Mods' images, on a 320×240 grid over the console's picture
                 // (between any widescreen strips).
                 let inner = egui::Rect::from_center_size(rect.center(), Vec2::new(rect.width() / wide, rect.height()));
+                if self.cfg.input.mouse && !overlay_open {
+                    ui.input(|i| {
+                        for e in &i.events {
+                            if let egui::Event::PointerButton { pos, button, pressed: true, .. } = e {
+                                let right = match button {
+                                    egui::PointerButton::Primary => false,
+                                    egui::PointerButton::Secondary => true,
+                                    _ => continue,
+                                };
+                                if rect.contains(*pos) {
+                                    clicks.push((right, (pos.x - inner.min.x) / inner.width(), (pos.y - inner.min.y) / inner.height()));
+                                }
+                            }
+                        }
+                    });
+                }
                 let (sx, sy) = (inner.width() / dwrc_mods::overlay::GRID_W, inner.height() / dwrc_mods::overlay::GRID_H);
                 // With Widescreen UI, images near an edge follow it out.
                 let side = (rect.width() - inner.width()) / 2.0;
@@ -1084,6 +1112,11 @@ impl App {
                 ctx.request_repaint_after(Duration::from_millis(100));
             }
         });
+        if let Some(e) = &self.emu {
+            for (right, u, v) in clicks {
+                e.send(EmuCmd::Click { right, u, v });
+            }
+        }
         if self.show_pause {
             let mut quit = false;
             let mut reset = false;

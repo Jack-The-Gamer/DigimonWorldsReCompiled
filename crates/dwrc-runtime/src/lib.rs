@@ -5,6 +5,7 @@
 pub mod bios;
 pub mod config;
 pub mod library;
+pub mod mouse;
 pub mod pal60;
 pub mod savestate;
 pub mod paths;
