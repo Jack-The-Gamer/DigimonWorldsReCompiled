@@ -226,13 +226,17 @@ impl Library {
     }
 
     /// Brings a library written by an older version up to date: fills in
-    /// each disc's image file and lists every chosen disc among `discs`.
+    /// each disc's image file, marks discs whose recorded hash has since
+    /// joined the verified list, and lists every chosen disc among `discs`.
     fn normalize(&mut self) {
         for e in self.games.values_mut().chain(self.discs.iter_mut()) {
             if e.bin.as_os_str().is_empty() {
                 if let Some(b) = image_file(&e.disc_path) {
                     e.bin = b;
                 }
+            }
+            if !e.verified && verified_dump(&e.sha1).is_some_and(|d| d.serial == e.ident.serial) {
+                e.verified = true;
             }
         }
         for e in self.games.values() {
@@ -628,6 +632,28 @@ mod tests {
         assert_eq!(lib.discs.len(), 1);
         assert!(same_file(&lib.games[&GameId::Dw1].bin, &bin));
         assert_eq!(lib.status(GameId::Dw1), DiscStatus::Ready);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn discs_verified_after_import_are_marked_on_load() {
+        let d = tmp("newly-verified");
+        let (jp, other) = (d.join("jp.bin"), d.join("other.bin"));
+        fake_bin(&jp);
+        fake_bin(&other);
+        // Imported while SLPS-01797 had no verified dump: its recorded hash
+        // is now on the list. A hash that isn't, or one listed for another
+        // release, stays unverified.
+        let mut a = entry(GameId::Dw1, "SLPS-01797", Region::NtscJ, &jp, false);
+        a.sha1 = "1d10389deee8c9849136623785c256071f2f9473".into();
+        let mut b = entry(GameId::Dw1, "SLES-02914", Region::Pal, &other, false);
+        b.sha1 = a.sha1.clone();
+        let mut lib = Library::default();
+        lib.add(a, true);
+        lib.add(b, false);
+        lib.normalize();
+        assert!(lib.games[&GameId::Dw1].verified);
+        assert_eq!(lib.discs.iter().filter(|e| e.verified).count(), 1);
         let _ = std::fs::remove_dir_all(&d);
     }
 }

@@ -57,18 +57,19 @@ These images are verified end-to-end (full-image SHA-1):
 | Game | Serial | File | SHA-1 |
 |---|---|---|---|
 | Digimon World (USA) | SLUS-01032 | `Digimon World (USA).bin` | `5611645da66183e30d11fb6c11a2784ff47e1fdb` |
+| Digimon World (Europe) | SLES-02914 | `Digimon World (Europe).bin` | `9c2922445280309f3d9c62bb70b57d6ad6da015a` |
+| Digimon World (Japan) (Rev 1) | SLPS-01797 | `DigimonWorld (Japan) (Rev 1).bin` | `1d10389deee8c9849136623785c256071f2f9473` |
 | Digimon World 2 (USA) | SLUS-01193 | `Digimon World 2 (USA).bin` | `d9cb009bc0006e901d8ab1365f764ab71da02115` |
+| Digimon World 2 (Japan) | SLPS-02844 | `DigimonWorld 2 (Japan).bin` | `d50dd1a95228deb4d928ed88b3f1386af1c0e64b` |
 | Digimon World 2003 (Europe) | SLES-03936 | `Digimon World 2003 (Europe) (En,Fr,De,Es,It).bin` | `457cb233349ba841e03b33d8060f8fbcadd45cb3` |
+| Digimon World 3: Aratanaru Bouken no Tobira (Japan) | SLPS-03446 | `DigimonWorld 3 - Aratanaru Bouken no Tobira (Japan).bin` | `8594fb44f601da64087a8996ffd89ab26abb11ea` |
 
 These releases are also recognised and run, but no dump of them is on the verified list yet, so they show an "unverified" note:
 
 | Game | Serial |
 |---|---|
-| Digimon World (Europe) | SLES-02914 |
-| Digimon World (Japan) | SLPS-01797 |
-| Digimon World 2 (Japan) | SLPS-02844 |
+| Digimon World (Japan), first pressing | SLPS-01797 |
 | Digimon World 3 (USA) | SLUS-01436 |
-| Digimon World 3: Aratanaru Bouken no Tobira (Japan) | SLPS-03446 |
 
 Other dumps of the verified releases are accepted with the same note. A `.cue` file is optional, and a wrong one never stops a disc: a `.cue` whose `.bin` was renamed opens the `.bin` named like the `.cue`; a `.cue` that leads to no image at all is ignored; and a `.bin` whose `.cue` names another file, or can't be read, runs on its own.
 

@@ -95,13 +95,37 @@ pub const RELEASES: &[KnownRelease] = &[
 ];
 
 /// Full-image hashes of dumps that have been verified end-to-end with
-/// Re:Compiled.
+/// Re:Compiled. Each matches its Redump entry (names are Redump's).
 pub const VERIFIED_DUMPS: &[KnownDump] = &[
     KnownDump {
         serial: "SLUS-01032",
         name: "Digimon World (USA).bin",
         size: 381_771_936,
         sha1: "5611645da66183e30d11fb6c11a2784ff47e1fdb",
+    },
+    KnownDump {
+        serial: "SLES-02914",
+        name: "Digimon World (Europe).bin",
+        size: 387_129_792,
+        sha1: "9c2922445280309f3d9c62bb70b57d6ad6da015a",
+    },
+    KnownDump {
+        serial: "SLPS-01797",
+        name: "DigimonWorld (Japan) (Rev 1).bin",
+        size: 381_162_768,
+        sha1: "1d10389deee8c9849136623785c256071f2f9473",
+    },
+    KnownDump {
+        serial: "SLPS-02844",
+        name: "DigimonWorld 2 (Japan).bin",
+        size: 508_918_704,
+        sha1: "d50dd1a95228deb4d928ed88b3f1386af1c0e64b",
+    },
+    KnownDump {
+        serial: "SLPS-03446",
+        name: "DigimonWorld 3 - Aratanaru Bouken no Tobira (Japan).bin",
+        size: 690_951_744,
+        sha1: "8594fb44f601da64087a8996ffd89ab26abb11ea",
     },
     KnownDump {
         serial: "SLUS-01193",
