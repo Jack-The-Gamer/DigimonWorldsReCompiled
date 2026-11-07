@@ -26,7 +26,7 @@ jobs:
             exe: DigimonWorldsReCompiled
             cli: dwrc-cli
             script: Play-Linux.sh
-          - os: macos-14
+          - os: macos-15
             name: macos-arm64
             exe: DigimonWorldsReCompiled
             cli: dwrc-cli
