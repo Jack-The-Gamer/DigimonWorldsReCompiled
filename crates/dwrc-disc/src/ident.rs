@@ -139,6 +139,12 @@ pub const VERIFIED_DUMPS: &[KnownDump] = &[
         size: 692_146_560,
         sha1: "457cb233349ba841e03b33d8060f8fbcadd45cb3",
     },
+    KnownDump {
+        serial: "SLUS-01436",
+        name: "Digimon World 3 (USA).bin",
+        size: 647_526_768,
+        sha1: "f0b022f9be53cbce14640abd8f01beaadcb35208",
+    },
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

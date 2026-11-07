@@ -6,7 +6,7 @@ Re:Compiled translates the games' own MIPS code (read from *your* discs) into na
 
 | | |
 |---|---|
-| Games | Digimon World (USA), Digimon World 2 (USA), Digimon World 2003 (Europe); also recognised, not yet verified: Digimon World (Europe, Japan), Digimon World 2 (Japan), Digimon World 3 (USA, Japan) |
+| Games | Digimon World (USA, Europe, Japan), Digimon World 2 (USA, Japan), Digimon World 3 (USA, Japan) / 2003 (Europe) |
 | Platforms | Windows 10/11, Linux (X11/Wayland), macOS 11+ (Intel and Apple Silicon) |
 | Language | Rust (plus Lua 5.4 for mod scripts; the optional built-in BIOS is OpenBIOS, MIT-licensed C) |
 | You provide | Your disc images (the `.bin`; a `.cue` is optional). A BIOS dump is optional |
@@ -78,16 +78,10 @@ These images are verified end-to-end (full-image SHA-1):
 | Digimon World 2 (USA) | SLUS-01193 | `Digimon World 2 (USA).bin` | `d9cb009bc0006e901d8ab1365f764ab71da02115` |
 | Digimon World 2 (Japan) | SLPS-02844 | `DigimonWorld 2 (Japan).bin` | `d50dd1a95228deb4d928ed88b3f1386af1c0e64b` |
 | Digimon World 2003 (Europe) | SLES-03936 | `Digimon World 2003 (Europe) (En,Fr,De,Es,It).bin` | `457cb233349ba841e03b33d8060f8fbcadd45cb3` |
+| Digimon World 3 (USA) | SLUS-01436 | `Digimon World 3 (USA).bin` | `f0b022f9be53cbce14640abd8f01beaadcb35208` |
 | Digimon World 3: Aratanaru Bouken no Tobira (Japan) | SLPS-03446 | `DigimonWorld 3 - Aratanaru Bouken no Tobira (Japan).bin` | `8594fb44f601da64087a8996ffd89ab26abb11ea` |
 
-These releases are also recognised and run, but no dump of them is on the verified list yet, so they show an "unverified" note:
-
-| Game | Serial |
-|---|---|
-| Digimon World (Japan), first pressing | SLPS-01797 |
-| Digimon World 3 (USA) | SLUS-01436 |
-
-Other dumps of the verified releases are accepted with the same note. A `.cue` file is optional, and a wrong one never stops a disc: a `.cue` whose `.bin` was renamed opens the `.bin` named like the `.cue`; a `.cue` that leads to no image at all is ignored; and a `.bin` whose `.cue` names another file, or can't be read, runs on its own.
+Other dumps of these releases (such as Digimon World (Japan)'s first pressing, before Rev 1) are accepted with an "unverified" note. A `.cue` file is optional, and a wrong one never stops a disc: a `.cue` whose `.bin` was renamed opens the `.bin` named like the `.cue`; a `.cue` that leads to no image at all is ignored; and a `.bin` whose `.cue` names another file, or can't be read, runs on its own.
 
 ### BIOS (optional)
 
@@ -134,7 +128,7 @@ Details: **[docs/architecture.md](docs/architecture.md)** · accuracy notes: **[
 
 * All three games boot through the real BIOS (or fast boot), play their FMVs with XA audio, and reach gameplay.
 * The recompiler validates with **zero mismatches** against the interpreter (≈224,000 checked block executions over ≈30,000 distinct blocks across the three games), and recompiled runs produce **pixel-identical** frames to the interpreter over minutes of scripted play.
-* The other releases (Digimon World Europe and Japan, Digimon World 2 Japan, Digimon World 3 USA and Japan) boot through their region's console BIOS and through OpenBIOS with zero validation mismatches, to their intro FMV or, for Digimon World 3, the title screen and load menu; they have not been played further yet.
+* The other releases (Digimon World Europe and Japan, Digimon World 2 Japan, Digimon World 3 USA and Japan) match their Redump dumps and were played on their region's console BIOS in validation mode with zero mismatches, from a new game (or an existing save) to a new in-game save that loads back in a fresh session.
 * A disc-free differential fuzz test (`cargo test -p dwrc-recomp`) compares random programs on both engines in CI.
 
 ## Building
