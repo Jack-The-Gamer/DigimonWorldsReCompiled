@@ -57,10 +57,13 @@ Keys can be rebound in **Settings → Controls**.
 | Digimon World 1 battle (also tournaments and Vs battles) | the command icon clicked; the **FINISH!!** sign once the finisher is ready. While a finisher charges, every click (either button) counts as an L1/R1 press | the item menu |
 | Digimon World 1 training | | ends it early (as △) |
 | Digimon World 2003 battle | the command, technique or item clicked | back |
+| Digimon World 2003 card battle | the folder or card clicked: the highlight moves there and it is picked. In a deck laid out to pick from, the first click highlights the card and a second click on it takes it | back; **No** on a question |
+| Yes/no questions | the answer clicked | **No** (Digimon World 2003) |
+| Digimon World 2003's save and load screens | the first click picks a save, a second click on it takes it | back |
 | Title screens, movies | Start (and on Digimon World 2003's title, New Game or Continue as clicked) | |
 | Digimon World 2003's language screen (European disc) | the language clicked | |
 
-Menus that work this way: Digimon World 1's Triangle menu, the Digimon and Player menus' tabs, the Tech tab's grid, the evolution chart, medals and cards on the Player menu, the inventory and its boxes, dialogue choices, shops, the title and memory card menus, Vs mode's mode and arena choices; Digimon World 2003's field menu and its screens (items, techniques, status and equipment, the party's panels), shops, the Digimon Lab, choices, the save and load screens, and the battle menus. In Digimon World 2003's card battles a click is only ✕ or △ (next, back). Digimon World 2 has no mouse support yet. With **Widescreen UI**, clicks on menus moved out to the edges reach them.
+Menus that work this way: Digimon World 1's Triangle menu, the Digimon and Player menus' tabs, the Tech tab's grid, the evolution chart, medals and cards on the Player menu, the inventory and its boxes, dialogue choices, shops, the title and memory card menus, Vs mode's mode and arena choices; Digimon World 2003's field menu and its screens (items, techniques, status and equipment, the party's panels), shops, the Digimon Lab, choices, and the battle and card battle menus. Digimon World 2 has no mouse support yet. With **Widescreen UI**, clicks on menus moved out to the edges reach them.
 
 With the **Save States** mod (in the built-in index), **1** to **5** save the game to five slots and **Shift + 1** to **5** load them. **F11** switches fullscreen on and off anywhere in the launcher. While playing: **Esc** pause menu · **F10** mods · **F12** screenshot · hold **Tab** to fast-forward.
 
