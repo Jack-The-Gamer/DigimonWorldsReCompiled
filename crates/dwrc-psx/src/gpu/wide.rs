@@ -72,6 +72,13 @@ const RUN: u64 = 4;
 /// element's edge belongs to what holds it, found by bounds).
 const SLIVER: i64 = 16;
 
+/// A window's frame lies at most this far outside its fill (see `Canvas::frame_shift`).
+const FRAME: i32 = 6;
+/// Frame pieces other than lines are at most this big.
+pub(super) const FRAME_PIECE: i32 = 8;
+/// A window's frame is drawn within this many primitives after it.
+const FRAME_RUN: u32 = 24;
+
 /// Pieces of UI seen before and which way their group moved (-1, 0, 1),
 /// by the size of their drawing area and their box in it; kept across
 /// pictures without them and save state loads (canvases are not).
@@ -130,6 +137,8 @@ pub(super) struct Canvas {
     groups: Vec<([i32; 4], i32, Option<i32>)>,
     /// UI pieces drawn since the groups were last made, and how far each moved.
     drawn: Vec<([i32; 4], i32)>,
+    /// Primitives drawn here since the last UI piece.
+    since_ui: u32,
 }
 
 impl Canvas {
@@ -226,6 +235,20 @@ impl Canvas {
             }
             _ => [Some((dx, None)), None],
         }
+    }
+
+    /// How far a piece of a window's frame moves (`b`: a line, or a small
+    /// unshaded piece that is not UI): with the window, when the last UI
+    /// piece was a window (at least 16×16), drawn at most `FRAME_RUN`
+    /// primitives before, and `b` lies on it or hugs it. Digimon World 1
+    /// draws a window as a rectangle, then its border in lines, its corners
+    /// in small pieces and its cursor in lines; effects in the scene that
+    /// pass over the HUD are drawn apart from it and stay.
+    fn frame_shift(&self, b: [i32; 4]) -> i32 {
+        let Some(&(g, dx)) = self.drawn.last() else { return 0 };
+        let window = g[1] - g[0] >= 15 && g[3] - g[2] >= 15;
+        let on = b[0] >= g[0] - FRAME && b[1] <= g[1] + FRAME && b[2] >= g[2] - FRAME && b[3] <= g[3] + FRAME;
+        if window && on && self.since_ui <= FRAME_RUN { dx } else { 0 }
     }
 
     /// Vblank: the groups are made again from the recent pieces.
@@ -347,14 +370,23 @@ fn anchored_groups(items: &[([i32; 4], u64)], width: i32, margin: i32) -> Vec<([
     }
     // A group that would go to an edge but sits against a window across the
     // screen drawn before it (a tab on top of a menu window, a label on its
-    // edge) stays with the window. HUD the window is drawn over keeps its own place.
+    // edge), or lines up with that window's side (Digimon World 1's name box
+    // under its letter window), stays with the window. HUD the window is
+    // drawn over keeps its own place.
     let against = |a: &[i32; 4], b: &[i32; 4]| a[0] <= b[1] + 2 && b[0] <= a[1] + 2 && a[2] <= b[3] + 2 && b[2] <= a[3] + 2;
+    // Lined up: just above or below it (within EDGE), inside its span, with
+    // the side it would move to level with the window's.
+    let lined_up = |h: &[i32; 4], g: &[i32; 4], dx: i32| {
+        let gap = (g[2] - h[3]).max(h[2] - g[3]);
+        let side = if dx < 0 { (h[0] - g[0]).abs() } else { (h[1] - g[1]).abs() };
+        (0..=EDGE).contains(&gap) && g[0] >= h[0] - 2 && g[1] <= h[1] + 2 && side <= 2
+    };
     for i in 0..out.len() {
         let (g, dx, _) = out[i];
         if dx == 0 || held[i].is_some() {
             continue;
         }
-        let window = out.iter().enumerate().filter(|&(j, (h, _, _))| j != i && spans(h) && first[h] < first[&g] && against(h, &g)).max_by_key(|(_, (h, _, _))| size(h));
+        let window = out.iter().enumerate().filter(|&(j, (h, _, _))| j != i && spans(h) && first[h] < first[&g] && (against(h, &g) || lined_up(h, &g, dx))).max_by_key(|(_, (h, _, _))| size(h));
         if let Some((_, &(_, hdx, hs))) = window {
             out[i].1 = hdx;
             out[i].2 = hs;
@@ -605,7 +637,7 @@ impl Gpu {
     /// drawing area's sides. Widescreen UI: always. Returns where to draw it
     /// (see `Draws`; set each one's clip with `side_clip`), or `None` when
     /// there is no second pass.
-    pub(super) fn side_begin(&mut self, xmin: i32, xmax: i32, ymin: i32, ymax: i32, ui: bool, semi: bool) -> Option<Draws> {
+    pub(super) fn side_begin(&mut self, xmin: i32, xmax: i32, ymin: i32, ymax: i32, ui: bool, frame: bool, semi: bool) -> Option<Draws> {
         let (x1, y1, x2, y2) = (self.draw_x1, self.draw_y1, self.draw_x2, self.draw_y2);
         if y2 >= VRAM_H as i32 || x2 < x1 || y2 < y1 {
             return None;
@@ -657,6 +689,7 @@ impl Gpu {
                     seq: 0,
                     groups: Vec::new(),
                     drawn: Vec::new(),
+                    since_ui: 0,
                 };
                 if full {
                     // The picture drawn so far.
@@ -668,7 +701,15 @@ impl Gpu {
         };
         let mut canvas = w.canvases.swap_remove(i);
         canvas.used = w.clock;
-        let mut draws = if ui { canvas.ui_shift([xmin - x1, xmax - x1, ymin - y1, ymax - y1], semi, &w.seen) } else { [Some((0, None)), None] };
+        let b = [xmin - x1, xmax - x1, ymin - y1, ymax - y1];
+        canvas.since_ui = if ui { 0 } else { canvas.since_ui.saturating_add(1) };
+        let mut draws = if ui {
+            canvas.ui_shift(b, semi, &w.seen)
+        } else if frame && full {
+            [Some((canvas.frame_shift(b), None)), None]
+        } else {
+            [Some((0, None)), None]
+        };
         for (_, clip) in draws.iter_mut().flatten() {
             if let Some((a, b)) = clip {
                 *clip = Some((*a + x1, *b + x1));
@@ -1031,8 +1072,40 @@ mod tests {
     }
 
     #[test]
+    fn a_box_lined_up_under_a_window_stays_with_it() {
+        // Digimon World 1's naming screen: the letter window across the screen,
+        // and the name box under it, level with its left side.
+        let g = anchored_groups(&[([19, 300, 32, 166], 1), ([19, 159, 183, 221], 2)], 320, 53);
+        assert!(g.iter().all(|(_, dx, _)| *dx == 0), "{g:?}");
+        // HUD at the edge far below a window, or not level with it, still moves.
+        let g = anchored_groups(&[([19, 300, 32, 100], 1), ([19, 120, 183, 221], 2)], 320, 53);
+        assert_eq!(g.iter().find(|(b, _, _)| b[2] == 183).unwrap().1, -53);
+        let g = anchored_groups(&[([19, 300, 32, 166], 1), ([10, 120, 183, 221], 2)], 320, 53);
+        assert_eq!(g.iter().find(|(b, _, _)| b[2] == 183).unwrap().1, -53);
+    }
+
+    #[test]
+    fn a_window_frame_goes_with_its_fill() {
+        let mut c = Canvas { x1: 0, y1: 0, x2: 319, y2: 239, margin: 53, px: Vec::new(), used: 0, full: true, stretch: false, boxes: Vec::new(), seq: 0, groups: Vec::new(), drawn: Vec::new(), since_ui: 0 };
+        // The fill moved left, then its border (a line just outside it) and a corner.
+        c.drawn.push(([19, 159, 183, 221], -53));
+        c.since_ui = 1;
+        assert_eq!(c.frame_shift([15, 15, 184, 219]), -53);
+        c.since_ui = 16;
+        assert_eq!(c.frame_shift([160, 164, 218, 222]), -53);
+        // Something drawn long after, or away from it, stays.
+        c.since_ui = 40;
+        assert_eq!(c.frame_shift([20, 24, 190, 194]), 0);
+        c.since_ui = 1;
+        assert_eq!(c.frame_shift([200, 204, 190, 194]), 0);
+        // After a small UI piece (a letter), nothing follows it.
+        c.drawn.push(([30, 37, 190, 201], -53));
+        assert_eq!(c.frame_shift([31, 36, 202, 202]), 0);
+    }
+
+    #[test]
     fn pieces_drawn_over_are_forgotten() {
-        let mut c = Canvas { x1: 0, y1: 0, x2: 319, y2: 239, margin: 53, px: Vec::new(), used: 0, full: true, stretch: false, boxes: Vec::new(), seq: 0, groups: Vec::new(), drawn: Vec::new() };
+        let mut c = Canvas { x1: 0, y1: 0, x2: 319, y2: 239, margin: 53, px: Vec::new(), used: 0, full: true, stretch: false, boxes: Vec::new(), seq: 0, groups: Vec::new(), drawn: Vec::new(), since_ui: 0 };
         let mut seen = Remembered::new();
         // A menu page: a window across the screen, a line of text in it near the left.
         c.ui_shift([14, 305, 34, 220], false, &seen);

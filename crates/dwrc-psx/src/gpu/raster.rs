@@ -221,7 +221,8 @@ impl Gpu {
             && (!prim.textured || self.flat_texture(&verts, &prim));
         let ui = self.is_ui(textured, shaded, true, layer, clut, (xmax - xmin + 1, ymax - ymin + 1));
         let drawn = verts;
-        if let Some(draws) = self.side_begin(if layer { self.draw_x1 - 1 } else { xmin }, xmax, ymin, ymax, ui, semi) {
+        let frame = !shaded && xmax - xmin <= super::wide::FRAME_PIECE && ymax - ymin <= super::wide::FRAME_PIECE;
+        if let Some(draws) = self.side_begin(if layer { self.draw_x1 - 1 } else { xmin }, xmax, ymin, ymax, ui, frame, semi) {
             if layer {
                 let (lo, hi) = self.side.as_ref().map(|s| (s.lo, s.hi)).unwrap();
                 for v in verts.iter_mut() {
@@ -247,7 +248,7 @@ impl Gpu {
         if self.wide.is_some() && self.packet_addr != 0 {
             for mut b in self.take_beside() {
                 self.swap_vram(b.rect, &mut b.texels);
-                if self.side_begin(xmin + b.dx, xmax + b.dx, ymin, ymax, false, semi).is_some() {
+                if self.side_begin(xmin + b.dx, xmax + b.dx, ymin, ymax, false, false, semi).is_some() {
                     if let Some(s) = &mut self.side {
                         s.full = false;
                     }
@@ -578,7 +579,8 @@ impl Gpu {
         if w <= 0 {
             return;
         }
-        if let Some(draws) = self.side_begin(if layer { self.draw_x1 - 1 } else { x0 }, x0 + w - 1, y0, y0 + h - 1, ui, semi) {
+        let frame = w <= super::wide::FRAME_PIECE && h <= super::wide::FRAME_PIECE;
+        if let Some(draws) = self.side_begin(if layer { self.draw_x1 - 1 } else { x0 }, x0 + w - 1, y0, y0 + h - 1, ui, frame, semi) {
             for (d, clip) in draws.into_iter().flatten() {
                 self.side_clip(clip);
                 let (lo, x1, x2, hi, full) = self.side.as_ref().map(|s| (s.lo, s.x1, s.x2, s.hi, s.full)).unwrap();
@@ -628,9 +630,10 @@ impl Gpu {
         }
         self.line_pass(x0, y0, x1, y1, c0, c1, shaded, semi);
         // Widescreen: again into the side strips, when it reaches past the area.
-        // Lines are never UI (games outline things in the scene with them).
+        // Lines are never UI (games outline things in the scene with them),
+        // but a window's border goes with its window (`Canvas::frame_shift`).
         let ui = false;
-        if let Some(draws) = self.side_begin(x0.min(x1), x0.max(x1), y0.min(y1), y0.max(y1), ui, semi) {
+        if let Some(draws) = self.side_begin(x0.min(x1), x0.max(x1), y0.min(y1), y0.max(y1), ui, true, semi) {
             for (d, clip) in draws.into_iter().flatten() {
                 self.side_clip(clip);
                 self.line_pass(x0 + d, y0, x1 + d, y1, c0, c1, shaded, semi);
