@@ -136,6 +136,11 @@ pub fn apply(psx: &mut Psx, game: GameId, w: Widescreen, ui: bool) {
 /// says per axis (flags at `a0`, `a1`) whether the scroll may move. When it
 /// stops one, a companion word (gp-relative; the base it was set from at
 /// the map's load, less the scroll) is reset to the base at that end.
+///
+/// Its callers: the camera following the player, a scripted camera pan
+/// (`tickCameraMovement` in the dw_decomp decompilation: back to the player
+/// after training, after "Agumon joins the city!") and a camera jump. The
+/// pan's call is the first one after the function in the executable.
 const DW1_SCROLL_LIMITS: [(u32, u32); 53] = {
     const F: u32 = 0xFFFF_FFFF;
     const A: u32 = 0xFFFF_0000;
@@ -149,6 +154,61 @@ const DW1_SCROLL_LIMITS: [(u32, u32); 53] = {
         (0xA4240000, A), (0xAF820000, A), (0xACA00000, F), (0x03E00008, F), (0x00000000, F),
     ]
 };
+
+/// The same function as the Europe and Japan executables have it (`0x800E16F0`
+/// on SLES-02914, `0x800E2EF4` on SLPS-01797 rev 1), masked like
+/// `DW1_SCROLL_LIMITS`. Those two were compiled with less optimisation: the
+/// flags' addresses are kept in `s1` and `s0`, and every value is loaded
+/// again each time it is used, so the function is 85 words instead of 53.
+/// What it does, its callers and their order are the same.
+const DW1_SCROLL_LIMITS_EU_JP: [(u32, u32); 85] = {
+    const F: u32 = 0xFFFF_FFFF;
+    const A: u32 = 0xFFFF_0000;
+    [
+        (0x27BDFFF8, F), (0xAFB10004, F), (0xAFB00000, F), (0x00808821, F), (0x00A08021, F), (0x24020001, F), (0xAE020000, F), (0xAE220000, F),
+        (0x3C010000, A), (0x84220000, A), (0x00000000, F), (0x04410009, F), (0x00000000, F), (0x3C010000, A), (0xA4200000, A), (0x87820000, A),
+        (0x00000000, F), (0xAF820000, A), (0xAE200000, F), (0x10000018, F), (0x00000000, F), (0x3C010000, A), (0x84230000, A), (0x3C010000, A),
+        (0x80220000, A), (0x00000000, F), (0x000211C0, F), (0x2042FEC0, F), (0x0043082A, F), (0x1020000E, F), (0x00000000, F), (0x3C010000, A),
+        (0x80220000, A), (0x00000000, F), (0x000211C0, F), (0x2042FEC0, F), (0x00021400, F), (0x00021403, F), (0x3C010000, A), (0xA4220000, A),
+        (0x87820000, A), (0x00000000, F), (0xAF820000, A), (0xAE200000, F), (0x3C010000, A), (0x84220000, A), (0x00000000, F), (0x04410009, F),
+        (0x00000000, F), (0x3C010000, A), (0xA4200000, A), (0x87820000, A), (0x00000000, F), (0xAF820000, A), (0xAE000000, F), (0x10000018, F),
+        (0x00000000, F), (0x3C010000, A), (0x84230000, A), (0x3C010000, A), (0x80220000, A), (0x00000000, F), (0x000211C0, F), (0x2042FF10, F),
+        (0x0043082A, F), (0x1020000E, F), (0x00000000, F), (0x3C010000, A), (0x80220000, A), (0x00000000, F), (0x000211C0, F), (0x2042FF10, F),
+        (0x00021400, F), (0x00021403, F), (0x3C010000, A), (0xA4220000, A), (0x87820000, A), (0x00000000, F), (0xAF820000, A), (0xAE000000, F),
+        (0x8FB10004, F), (0x8FB00000, F), (0x27BD0008, F), (0x03E00008, F), (0x00000000, F),
+    ]
+};
+
+/// One way the executables have the scroll limits: the function's words
+/// and, among them, where the horizontal axis's addresses are read from. The
+/// vertical axis's are the same, `y` words further on.
+struct LimitsShape {
+    words: &'static [(u32, u32)],
+    /// The `lui at` of the scroll's first load, and of the map size's.
+    scroll: usize,
+    size: usize,
+    /// The companion word's store, and the loads of its bases at the low and
+    /// the high end (all off `gp`).
+    other: usize,
+    low_base: usize,
+    high_base: usize,
+    y: usize,
+}
+
+const DW1_LIMITS_SHAPES: [LimitsShape; 2] = [
+    LimitsShape { words: &DW1_SCROLL_LIMITS, scroll: 3, size: 14, other: 11, low_base: 8, high_base: 22, y: 24 },
+    LimitsShape { words: &DW1_SCROLL_LIMITS_EU_JP, scroll: 8, size: 23, other: 17, low_base: 15, high_base: 40, y: 36 },
+];
+
+/// An executable's code as instruction words.
+fn code_words(exe: &PsxExe) -> Vec<u32> {
+    exe.text.chunks_exact(4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect()
+}
+
+/// Where `pattern` (`(word, mask)` pairs) is first found in `words`.
+fn find_words(words: &[u32], pattern: &[(u32, u32)]) -> Option<usize> {
+    words.windows(pattern.len()).position(|w| w.iter().zip(pattern).all(|(&x, &(want, mask))| x & mask == want))
+}
 
 /// One axis of Digimon World 1's field scroll: where its values are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,17 +227,27 @@ struct ScrollAxis {
 impl ScrollAxis {
     /// Keeps the scroll `margin` pixels inside the map's ends (the game: 0),
     /// as the game does; returns whether it may move.
-    fn limit(&self, bus: &mut dwrc_psx::Bus, gp: u32, margin: i32) -> bool {
+    ///
+    /// `pan`: the call is a camera pan's. A pan ends once each axis has
+    /// either reached its target or been stopped here, and the game keeps
+    /// its targets inside its own limits, so there a pan that has run out of
+    /// steps is on its target. With a margin the target can lie past the
+    /// limit: the pan then stands on the limit, never past it and never on
+    /// its target, and would go on for ever (the camera stuck, a script
+    /// waiting for it hung). So for a pan, standing on a limit moved in by
+    /// the margin counts as stopped by it.
+    fn limit(&self, bus: &mut dwrc_psx::Bus, gp: u32, margin: i32, pan: bool) -> bool {
         let scroll = bus.peek16(self.scroll) as i16 as i32;
         let max = bus.peek8(self.size) as i8 as i32 * 128 - self.screen;
         // A map narrower than the wide picture: the scroll stays in its middle.
         let margin = margin.min(max.max(0) / 2);
         let (lo, hi) = (margin, max - margin);
+        let on = pan && margin > 0;
         let gpw = |off: i16| gp.wrapping_add(off as i32 as u32);
         let base = |bus: &dwrc_psx::Bus, off: i16| bus.peek16(gpw(off)) as i16 as i32;
-        let (at, other) = if scroll < lo {
+        let (at, other) = if scroll < lo || (on && scroll == lo) {
             (lo, base(bus, self.low_base) - lo)
-        } else if scroll > hi {
+        } else if scroll > hi || (on && scroll == hi) {
             (hi, base(bus, self.high_base) + (max - hi))
         } else {
             return true;
@@ -189,16 +259,26 @@ impl ScrollAxis {
 }
 
 /// Finds Digimon World 1's field scroll limits in the executable: the
-/// function's address and its two axes.
-fn find_scroll_limits(exe: &PsxExe) -> Option<(u32, [ScrollAxis; 2])> {
-    let words: Vec<u32> = exe.text.chunks_exact(4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
-    let at = words.windows(DW1_SCROLL_LIMITS.len()).position(|w| w.iter().zip(&DW1_SCROLL_LIMITS).all(|(&x, &(want, mask))| x & mask == want))?;
+/// function's address, its two axes, and where the camera pan's call of it
+/// returns to (see `DW1_SCROLL_LIMITS`), if the calls are laid out as known.
+fn find_scroll_limits(exe: &PsxExe) -> Option<(u32, [ScrollAxis; 2], Option<u32>)> {
+    let words = code_words(exe);
+    let (shape, at) = DW1_LIMITS_SHAPES.iter().find_map(|s| Some((s, find_words(&words, s.words)?)))?;
     let w = &words[at..];
     let imm = |i: usize| w[i] as u16 as i16;
     // `lui at, hi` then a load off `at`.
     let abs = |i: usize| ((w[i] & 0xFFFF) << 16).wrapping_add(imm(i + 1) as i32 as u32);
-    let axis = |base: usize, screen: i32| ScrollAxis { scroll: abs(base + 3), size: abs(base + 14), screen, other: imm(base + 11), low_base: imm(base + 8), high_base: imm(base + 22) };
-    Some((exe.load_addr + 4 * at as u32, [axis(0, 320), axis(24, 240)]))
+    let axis = |base: usize, screen: i32| ScrollAxis { scroll: abs(base + shape.scroll), size: abs(base + shape.size), screen, other: imm(base + shape.other), low_base: imm(base + shape.low_base), high_base: imm(base + shape.high_base) };
+    let addr = exe.load_addr + 4 * at as u32;
+    // Its callers, in the executable's order: following the player (before
+    // the function), the pan, the jump.
+    let jal = 0x0C00_0000 | (addr >> 2 & 0x03FF_FFFF);
+    let calls: Vec<usize> = words.iter().enumerate().filter(|&(_, &x)| x == jal).map(|(i, _)| i).collect();
+    let pan = match calls[..] {
+        [follow, pan, jump] if follow < at && pan > at && jump > pan => Some(exe.load_addr + 4 * (pan as u32 + 2)),
+        _ => None,
+    };
+    Some((addr, [axis(0, 320), axis(shape.y, 240)], pan))
 }
 
 /// Digimon World 1's field scrolls until the edge of its 4:3 screen meets
@@ -210,21 +290,24 @@ fn install_scroll_limits(psx: &mut Psx, game: GameId, exe: &PsxExe) -> bool {
     if game != GameId::Dw1 {
         return false;
     }
-    let Some((addr, [x, y])) = find_scroll_limits(exe) else {
+    let Some((addr, [x, y], pan)) = find_scroll_limits(exe) else {
         log::warn!("widescreen: Digimon World 1's field scroll limits not found; the field may scroll past the map's ends");
         return false;
     };
+    if pan.is_none() {
+        log::warn!("widescreen: Digimon World 1's camera pan not found among the scroll limits' callers; every caller is taken for one");
+    }
     psx.bus.add_hook(
         addr,
         Box::new(move |cpu, bus| {
             let Some((num, den)) = bus.gpu.widescreen() else { return HookAction::Continue };
             let margin = dwrc_psx::gpu::widescreen_margin(320, num, den) as i32;
-            let (gp, flag_x, flag_y) = (cpu.regs[28], cpu.regs[4], cpu.regs[5]);
-            let mx = x.limit(bus, gp, margin);
-            let my = y.limit(bus, gp, 0);
+            let (gp, flag_x, flag_y, ra) = (cpu.regs[28], cpu.regs[4], cpu.regs[5], cpu.regs[31]);
+            let panning = pan.is_none_or(|p| p == ra);
+            let mx = x.limit(bus, gp, margin, panning);
+            let my = y.limit(bus, gp, 0, panning);
             bus.poke32(flag_x, mx as u32);
             bus.poke32(flag_y, my as u32);
-            let ra = cpu.regs[31];
             cpu.set_pc(ra);
             HookAction::Redirect
         }),
@@ -259,19 +342,85 @@ const DW1_FIELD_TILES: [(u32, u32); 34] = {
     ]
 };
 
-/// Where Digimon World 1's field tiles are: the hook address (after a quad
-/// is set, before it is added to the drawing list), the tile table and the
-/// table of which tiles have a picture.
-fn find_field_tiles(exe: &PsxExe) -> Option<(u32, u32, u32)> {
-    let words: Vec<u32> = exe.text.chunks_exact(4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
-    let at = words.windows(DW1_FIELD_TILES.len()).position(|w| w.iter().zip(&DW1_FIELD_TILES).all(|(&x, &(want, mask))| x & mask == want))?;
+/// The end of the same loop as the Europe and Japan executables have it
+/// (in `0x800DE090..0x800DE3A0` on SLES-02914, `0x800DFA00..0x800DFD10` on
+/// SLPS-01797 rev 1), from where it works out the tile's table entry for the
+/// call that sets its quad (`0x800DE2FC`, `0x800DFC6C`). Compiled with less
+/// optimisation, the loop keeps only the packet (`s0`), the column (`s1`) and
+/// the row (`s2`) in registers; the window's first tile, the map's width and
+/// the window's columns are halfwords on the stack, and the tile's number is
+/// worked out from them each time it is used.
+const DW1_FIELD_TILES_EU_JP: [(u32, u32); 41] = {
+    const F: u32 = 0xFFFF_FFFF;
+    const A: u32 = 0xFFFF_0000;
+    const J: u32 = 0xFC00_0000;
+    [
+        (0x87A20032, F), (0x00000000, F), (0x00520018, F), (0x00001812, F), (0x87A20030, F), (0x00000000, F), (0x00431020, F), (0x02221820, F),
+        (0x00031080, F), (0x00431020, F), (0x00021880, F), (0x3C020000, A), (0x24420000, A), (0x00432021, F), (0x3C010000, A), (0x84250000, A),
+        (0x3C010000, A), (0x84260000, A), (0x02003821, F), (0x0C000000, J), (0x00000000, F), (0x8FA2002C, F), (0x00000000, F), (0x24443FFC, F),
+        (0x02002821, F), (0x0C000000, J), (0x00000000, F), (0x26100028, F), (0x02002021, F), (0x0C000000, J), (0x00000000, F), (0x22310001, F),
+        (0x87A20034, F), (0x00000000, F), (0x0222082A, F), (0x1420FF44, F), (0x00000000, F), (0x22520001, F), (0x2A410003, F), (0x1420FF3D, F),
+        (0x00000000, F),
+    ]
+};
+
+/// Tiles in Digimon World 1's tile table: the biggest map is 7 × 5.
+const DW1_MAP_TILES: u32 = 35;
+
+/// Where Digimon World 1's field background loop keeps what the hook needs
+/// when it gets there: the packet is in `s0` either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TileWindow {
+    /// `s2` the tile, `s3` its column in the window, `s5` the window's columns (USA).
+    Registers,
+    /// `s1` the column and `s2` the row; halfwords at these offsets off `sp`
+    /// hold the window's first tile, the map's width and the window's
+    /// columns (Europe, Japan).
+    Stack { first: i16, width: i16, columns: i16 },
+}
+
+impl TileWindow {
+    /// The tile being drawn, its column in the window and the window's columns.
+    fn read(self, cpu: &dwrc_psx::Cpu, bus: &dwrc_psx::Bus) -> (u32, u32, u32) {
+        match self {
+            TileWindow::Registers => (cpu.regs[18], cpu.regs[19], cpu.regs[21]),
+            TileWindow::Stack { first, width, columns } => {
+                let half = |off: i16| bus.peek16(cpu.regs[29].wrapping_add(off as i32 as u32)) as i16 as i32;
+                let (col, row) = (cpu.regs[17] as i32, cpu.regs[18] as i32);
+                (half(first).wrapping_add(half(width).wrapping_mul(row)).wrapping_add(col) as u32, col as u32, half(columns) as u32)
+            }
+        }
+    }
+}
+
+/// Digimon World 1's field background loop in an executable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TileLoop {
+    /// The hook address: after a quad is set, before it is added to the drawing list.
+    hook: u32,
+    /// The tile table and the table of which tiles have a picture.
+    table: u32,
+    has: u32,
+    window: TileWindow,
+}
+
+/// Finds Digimon World 1's field background loop (see `DW1_FIELD_TILES`).
+fn find_field_tiles(exe: &PsxExe) -> Option<TileLoop> {
+    let words = code_words(exe);
     let abs = |hi: u32, lo: u32| ((hi & 0xFFFF) << 16).wrapping_add(lo as u16 as i16 as i32 as u32);
-    let table = abs(words[at + 13], words[at + 15]);
-    // The picture check, earlier in the loop: `lui v0, hi; addiu v0, v0, lo; addu v0, v0, s2; lb v0, 0(v0)`.
-    let p = at.checked_sub(66)?;
-    let ok = words[p] & 0xFFFF_0000 == 0x3C02_0000 && words[p + 1] & 0xFFFF_0000 == 0x2442_0000 && words[p + 2] == 0x0052_1021 && words[p + 3] == 0x8042_0000;
-    let has = abs(words[p], words[p + 1]);
-    (ok && has < table).then(|| (exe.load_addr + 4 * (at as u32 + 19), table, has))
+    // The picture check, earlier in the loop: `lui v0, hi; addiu v0, v0, lo; addu v0, v0, <tile>; lb v0, 0(v0)`.
+    let has = |p: usize, add: u32| (words[p] & 0xFFFF_0000 == 0x3C02_0000 && words[p + 1] & 0xFFFF_0000 == 0x2442_0000 && words[p + 2] == add && words[p + 3] == 0x8042_0000).then(|| abs(words[p], words[p + 1]));
+    let hook = |i: usize| exe.load_addr + 4 * i as u32;
+    let found = if let Some(at) = find_words(&words, &DW1_FIELD_TILES) {
+        TileLoop { hook: hook(at + 19), table: abs(words[at + 13], words[at + 15]), has: has(at.checked_sub(66)?, 0x0052_1021)?, window: TileWindow::Registers }
+    } else {
+        let at = find_words(&words, &DW1_FIELD_TILES_EU_JP)?;
+        let imm = |i: usize| words[at + i] as u16 as i16;
+        TileLoop { hook: hook(at + 21), table: abs(words[at + 11], words[at + 12]), has: has(at.checked_sub(138)?, 0x0043_1021)?, window: TileWindow::Stack { first: imm(4), width: imm(0), columns: imm(32) } }
+    };
+    // The two tables are apart (which comes first differs between releases).
+    let apart = |a: u32, b: u32, len: u32| a.checked_add(len).is_some_and(|end| end <= b);
+    (apart(found.has, found.table, DW1_MAP_TILES) || apart(found.table, found.has, 20 * DW1_MAP_TILES)).then_some(found)
 }
 
 /// Digimon World 1's field map, as `install_field_tiles` sees it.
@@ -334,18 +483,19 @@ fn vram_rect(bus: &dwrc_psx::Bus, [x, y, w, h]: [u32; 4]) -> Vec<u16> {
 /// tile is the one in VRAM (in battle). Only the host's picture changes: the
 /// console runs as without it.
 fn install_field_tiles(psx: &mut Psx, exe: &PsxExe) -> bool {
-    let Some((addr, table, has)) = find_field_tiles(exe) else {
+    let Some(TileLoop { hook, table, has, window }) = find_field_tiles(exe) else {
         log::warn!("widescreen: Digimon World 1's field tiles not found; the field's sides may be black in places");
         return false;
     };
-    let mut map = FieldTiles { table, has, tiles: table - has, copy: Vec::new() };
+    let mut map = FieldTiles { table, has, tiles: DW1_MAP_TILES, copy: Vec::new() };
     psx.bus.add_hook(
-        addr,
+        hook,
         Box::new(move |cpu, bus| {
             if bus.gpu.widescreen().is_none() {
                 return HookAction::Continue;
             }
-            let (packet, tile, col, cols) = (cpu.regs[16], cpu.regs[18], cpu.regs[19], cpu.regs[21]);
+            let packet = cpu.regs[16];
+            let (tile, col, cols) = window.read(cpu, bus);
             let edges = [(-1i32, col == 0), (1, col + 1 == cols)];
             if tile >= map.tiles || !edges.iter().any(|e| e.1) {
                 return HookAction::Continue;
@@ -422,6 +572,118 @@ mod tests {
         assert_eq!(Widescreen::parse("OFF"), Some(Widescreen::Off));
         assert!((Widescreen::W16x9.stretch() - 4.0 / 3.0).abs() < 1e-6);
         assert_eq!(crop_middle(&[1, 2, 3, 4, 5, 6, 7, 8], 4, 2, 2), vec![2, 3, 6, 7]);
+    }
+
+    /// A camera pan standing on a limit the margin moved in counts as
+    /// stopped there (its target may lie past it); anything else on a limit
+    /// may move, as in the game's own function.
+    #[test]
+    fn a_pan_on_a_moved_limit_is_stopped() {
+        const GP: u32 = 0x8001_0000;
+        let mut psx = Psx::new(&vec![0u8; 512 * 1024], dwrc_psx::VideoStandard::Ntsc);
+        let bus = &mut psx.bus;
+        let axis = ScrollAxis { scroll: 0x8000_2000, size: 0x8000_2004, screen: 320, other: 0x10, low_base: 0x20, high_base: 0x24 };
+        let (other, low, high) = (GP + 0x10, GP + 0x20, GP + 0x24);
+        // A map of 5 tiles: the game's scroll runs 0..=320, at 16:9 53..=267.
+        bus.poke8(axis.size, 5);
+        bus.poke16(low, 320);
+        bus.poke16(high, 0);
+        let at = |bus: &mut dwrc_psx::Bus, scroll: i32, margin: i32, pan: bool| {
+            bus.poke16(axis.scroll, scroll as u16);
+            bus.poke32(other, 0x7777);
+            let moves = axis.limit(bus, GP, margin, pan);
+            (moves, bus.peek16(axis.scroll) as i16 as i32, bus.peek32(other) as i32)
+        };
+        assert_eq!(at(bus, 100, 53, true), (true, 100, 0x7777));
+        // Past a limit: put back on it, for every caller.
+        assert_eq!(at(bus, 50, 53, false), (false, 53, 267));
+        assert_eq!(at(bus, 300, 53, true), (false, 267, 53));
+        // On it: only a pan is stopped.
+        assert_eq!(at(bus, 53, 53, false), (true, 53, 0x7777));
+        assert_eq!(at(bus, 267, 53, false), (true, 267, 0x7777));
+        assert_eq!(at(bus, 53, 53, true), (false, 53, 267));
+        assert_eq!(at(bus, 267, 53, true), (false, 267, 53));
+        // The game's own limits (no margin: the other axis, widescreen's 4:3 part) are the game's.
+        assert_eq!(at(bus, 0, 0, true), (true, 0, 0x7777));
+        assert_eq!(at(bus, 320, 0, true), (true, 320, 0x7777));
+        // A map narrower than the wide picture (3 tiles: 0..=64) stays in its middle.
+        bus.poke8(axis.size, 3);
+        bus.poke16(high, 256);
+        assert_eq!(at(bus, 32, 53, true), (false, 32, 288));
+        assert_eq!(at(bus, 32, 53, false), (true, 32, 0x7777));
+    }
+
+    /// An executable of `words` at 0x80010000.
+    fn exe_of(words: &[u32]) -> PsxExe {
+        let text: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        PsxExe { pc: 0, gp: 0, load_addr: 0x8001_0000, text_size: text.len() as u32, bss_addr: 0, bss_size: 0, sp_base: 0, sp_offset: 0, region_marker: String::new(), text }
+    }
+
+    /// A pattern's words, each masked field holding the word's place in it.
+    fn filled(pattern: &[(u32, u32)]) -> Vec<u32> {
+        pattern.iter().enumerate().map(|(i, &(word, mask))| word | (i as u32 & !mask)).collect()
+    }
+
+    /// Both ways the executables have the scroll limits are found, with
+    /// each address read from its own instruction and the pan's call told
+    /// from the other two.
+    #[test]
+    fn scroll_limits_in_both_shapes() {
+        let axis = |scroll: u32, size: u32, screen, other, low_base, high_base| ScrollAxis { scroll: (scroll << 16) + scroll + 1, size: (size << 16) + size + 1, screen, other, low_base, high_base };
+        let want = [
+            (&DW1_SCROLL_LIMITS[..], [axis(3, 14, 320, 11, 8, 22), axis(27, 38, 240, 35, 32, 46)]),
+            (&DW1_SCROLL_LIMITS_EU_JP[..], [axis(8, 23, 320, 17, 15, 40), axis(44, 59, 240, 53, 51, 76)]),
+        ];
+        for (pattern, axes) in want {
+            let at = 8;
+            let jal = 0x0C00_0000 | (0x8001_0000u32 + 4 * at as u32) >> 2 & 0x03FF_FFFF;
+            let mut words = vec![0u32; at];
+            words[2] = jal;
+            words.extend(filled(pattern));
+            words.extend([0, jal, 0, 0, jal, 0]);
+            let pan = 0x8001_0000 + 4 * (at + pattern.len() + 1 + 2) as u32;
+            assert_eq!(find_scroll_limits(&exe_of(&words)), Some((0x8001_0020, axes, Some(pan))));
+            // Callers laid out another way: the function is still found.
+            words[2] = 0;
+            assert_eq!(find_scroll_limits(&exe_of(&words)), Some((0x8001_0020, axes, None)));
+        }
+        assert_eq!(find_scroll_limits(&exe_of(&[0; 200])), None);
+    }
+
+    /// Both ways the executables have the field background loop are found:
+    /// the hook's place, the two tables, and where the loop keeps its count.
+    #[test]
+    fn field_tiles_in_both_shapes() {
+        // The check of whether a tile has a picture, `back` words before the pattern.
+        let exe = |pattern: &[(u32, u32)], back: usize, add: u32| {
+            let mut words = vec![0u32; back];
+            words[..4].copy_from_slice(&[0x3C02_8015, 0x2442_F060, add, 0x8042_0000]);
+            words.extend(filled(pattern));
+            exe_of(&words)
+        };
+        let has = 0x8014_F060;
+        let us = find_field_tiles(&exe(&DW1_FIELD_TILES, 66, 0x0052_1021));
+        assert_eq!(us, Some(TileLoop { hook: 0x8001_0000 + 4 * (66 + 19), table: (13 << 16) + 15, has, window: TileWindow::Registers }));
+        let eu = find_field_tiles(&exe(&DW1_FIELD_TILES_EU_JP, 138, 0x0043_1021));
+        assert_eq!(eu, Some(TileLoop { hook: 0x8001_0000 + 4 * (138 + 21), table: (11 << 16) + 12, has, window: TileWindow::Stack { first: 48, width: 50, columns: 52 } }));
+        // Without the check where it belongs, the loop is not taken.
+        assert_eq!(find_field_tiles(&exe(&DW1_FIELD_TILES_EU_JP, 138, 0)), None);
+    }
+
+    /// The Europe and Japan loop's tile is worked out from the stack:
+    /// first tile + map width × row + column.
+    #[test]
+    fn a_tile_window_on_the_stack() {
+        let mut psx = Psx::new(&vec![0u8; 512 * 1024], dwrc_psx::VideoStandard::Ntsc);
+        let sp = 0x8000_3000u32;
+        for (off, v) in [(48u32, 8u16), (50, 6), (52, 4)] {
+            psx.bus.poke16(sp + off, v);
+        }
+        psx.cpu.regs[29] = sp;
+        (psx.cpu.regs[17], psx.cpu.regs[18]) = (3, 2);
+        assert_eq!(TileWindow::Stack { first: 48, width: 50, columns: 52 }.read(&psx.cpu, &psx.bus), (8 + 6 * 2 + 3, 3, 4));
+        (psx.cpu.regs[18], psx.cpu.regs[19], psx.cpu.regs[21]) = (23, 3, 4);
+        assert_eq!(TileWindow::Registers.read(&psx.cpu, &psx.bus), (23, 3, 4));
     }
 
     #[test]
