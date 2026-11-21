@@ -112,7 +112,7 @@ impl Gpu {
         let area = [self.draw_x1, self.draw_y1, self.draw_x2, self.draw_y2];
         let (addr, tex) = (self.packet_addr, (clut & 0xFFFF) << 16 | (self.texpage & 0x1FF));
         if let Some(t) = &mut self.trace {
-            t.push(super::TracedPrim { addr, op, x0, x1, y0, y1, area, tex, shift: None });
+            t.push(super::TracedPrim { addr, op, x0, x1, y0, y1, area, tex, shift: None, ui: false });
         }
     }
 
@@ -219,9 +219,12 @@ impl Gpu {
             && verts.iter().filter(|v| v.x == xmin).count() == 2
             && verts.iter().filter(|v| v.x == xmax).count() == 2
             && (!prim.textured || self.flat_texture(&verts, &prim));
-        let ui = self.is_ui(textured, shaded, true, layer, clut, (xmax - xmin + 1, ymax - ymin + 1));
+        // A sprite the game draws in its scene with a UI texture (see `add_wide_scene`) stays out of the UI.
+        let scene = self.take_wide_scene();
+        let ui = !scene && self.is_ui(textured, shaded, true, layer, clut, (xmax - xmin + 1, ymax - ymin + 1));
         let drawn = verts;
-        let frame = !shaded && xmax - xmin <= super::wide::FRAME_PIECE && ymax - ymin <= super::wide::FRAME_PIECE;
+        // Frame pieces: small unshaded ones (a window's corners), or untextured flat ones (a scroll bar's fill).
+        let frame = !shaded && (!textured || (xmax - xmin <= super::wide::FRAME_PIECE && ymax - ymin <= super::wide::FRAME_PIECE));
         if let Some(draws) = self.side_begin(if layer { self.draw_x1 - 1 } else { xmin }, xmax, ymin, ymax, ui, frame, semi) {
             if layer {
                 let (lo, hi) = self.side.as_ref().map(|s| (s.lo, s.hi)).unwrap();
@@ -595,6 +598,29 @@ impl Gpu {
                 }
             }
             self.side_end();
+        }
+        // A tile of a backdrop: again a period to each side, in the strips only.
+        if textured && self.wide.is_some() {
+            // (The copies go through `side_begin`, which notes its move on the traced primitive: keep the tile's.)
+            let traced = self.trace.as_ref().and_then(|t| t.last()).map(|p| (p.shift, p.ui));
+            for dx in self.backdrop_copies(clut, (w, h)) {
+                let x0 = x0 + dx;
+                if self.side_begin(x0, x0 + w - 1, y0, y0 + h - 1, false, false, semi).is_none() {
+                    continue;
+                }
+                let (x1, x2) = self.side.as_ref().map(|s| (s.x1, s.x2)).unwrap();
+                for clip in [(i32::MIN / 2, x1 - 1), (x2 + 1, i32::MAX / 2)] {
+                    self.side_clip(Some(clip));
+                    let (lo, hi) = self.side.as_ref().map(|s| (s.lo, s.hi)).unwrap();
+                    if lo <= hi {
+                        pass(self, x0.max(lo), (x0 + w).min(hi + 1), x0);
+                    }
+                }
+                self.side_end();
+            }
+            if let (Some((shift, ui)), Some(p)) = (traced, self.trace.as_mut().and_then(|t| t.last_mut())) {
+                (p.shift, p.ui) = (shift, ui);
+            }
         }
     }
 

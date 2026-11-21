@@ -5,7 +5,7 @@ mod raster;
 mod wide;
 
 pub use wide::margin as widescreen_margin;
-pub use wide::{Beside, UiRules};
+pub use wide::{Backdrop, Beside, UiRules};
 
 use crate::irq::{Interrupt, Irq};
 use crate::timers::TimerGpuInfo;
@@ -110,6 +110,8 @@ pub struct Gpu {
     side: Option<wide::Side>,
     /// Widescreen UI rules set while widescreen is off (used when it comes on).
     pending_ui: Option<wide::UiRules>,
+    /// Widescreen: the game's repeating backdrops (host state; see `wide::Backdrop`).
+    backdrops: Vec<wide::Backdrop>,
     /// Development: every primitive drawn while `Some` (see `TracedPrim`).
     pub trace: Option<Vec<TracedPrim>>,
     /// Development: RAM address of the linked-list packet being fed (0 otherwise).
@@ -133,6 +135,8 @@ pub struct TracedPrim {
     pub tex: u32,
     /// Widescreen: how far the second pass moved it (`None`: no second pass).
     pub shift: Option<i32>,
+    /// Widescreen UI: whether it counted as a piece of the UI.
+    pub ui: bool,
 }
 
 const DITHER: [[i32; 4]; 4] = [[-4, 0, -3, 1], [2, -2, 3, -1], [-3, 1, -4, 0], [3, -1, 2, -2]];
@@ -188,6 +192,7 @@ impl Gpu {
             wide: None,
             side: None,
             pending_ui: None,
+            backdrops: Vec::new(),
             trace: None,
             packet_addr: 0,
         };
@@ -412,6 +417,11 @@ impl Gpu {
                 let (x, y) = (v & 0x3FE, (v >> 10) & 0x1FF);
                 if (x, y) != (self.display_x, self.display_y) {
                     self.wide_display_moved(x, y);
+                    if let Some(t) = &mut self.trace {
+                        // The display moving, in drawing order (GP1 0x05, logged as op 105).
+                        let area = [self.draw_x1, self.draw_y1, self.draw_x2, self.draw_y2];
+                        t.push(TracedPrim { addr: 0, op: 0x105, x0: x as i32, x1: x as i32, y0: y as i32, y1: y as i32, area, tex: 0, shift: None, ui: false });
+                    }
                 }
                 self.display_x = x;
                 self.display_y = y;
@@ -547,6 +557,11 @@ impl Gpu {
                 let w = ((self.cmd[2] & 0xFFFF).wrapping_sub(1) & 0x3FF) + 1;
                 let h = (((self.cmd[2] >> 16) & 0xFFFF).wrapping_sub(1) & 0x1FF) + 1;
                 self.wide_write(x, y, w, h);
+                if let Some(t) = &mut self.trace {
+                    // Uploads too (logged as op a0): dest box.
+                    let area = [self.draw_x1, self.draw_y1, self.draw_x2, self.draw_y2];
+                    t.push(TracedPrim { addr: self.packet_addr, op: 0xA0, x0: x as i32, x1: (x + w) as i32 - 1, y0: y as i32, y1: (y + h) as i32 - 1, area, tex: 0, shift: None, ui: false });
+                }
                 self.state = Gp0State::Upload { x, y, w, h, pos: 0 };
             }
             0xC0..=0xDF => {
@@ -714,7 +729,7 @@ impl Gpu {
             // Copies too: dest box, source in `tex`.
             let area = [self.draw_x1, self.draw_y1, self.draw_x2, self.draw_y2];
             let (x0, y0) = (dx as i32, dy as i32);
-            t.push(TracedPrim { addr: self.packet_addr, op: 0x80, x0, x1: x0 + w as i32 - 1, y0, y1: y0 + h as i32 - 1, area, tex: sy << 16 | sx, shift: None });
+            t.push(TracedPrim { addr: self.packet_addr, op: 0x80, x0, x1: x0 + w as i32 - 1, y0, y1: y0 + h as i32 - 1, area, tex: sy << 16 | sx, shift: None, ui: false });
         }
     }
 

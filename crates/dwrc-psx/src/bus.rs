@@ -235,9 +235,10 @@ impl Bus {
         self.irq = Irq::default();
         self.dma = Dma::new();
         self.timers = Timers::new();
-        let (std, wide, ui) = (self.gpu.standard, self.gpu.widescreen(), self.gpu.widescreen_ui());
+        let (std, wide, ui, backdrops) = (self.gpu.standard, self.gpu.widescreen(), self.gpu.widescreen_ui(), self.gpu.widescreen_backdrops());
         self.gpu = Gpu::new(std);
         self.gpu.set_widescreen_ui(ui);
+        self.gpu.set_widescreen_backdrops(backdrops);
         self.gpu.set_widescreen(wide);
         self.cdrom.reset();
         self.spu = Spu::new();

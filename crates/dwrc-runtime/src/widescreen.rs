@@ -14,7 +14,7 @@
 
 use crate::config::Widescreen;
 use dwrc_disc::{GameId, PsxExe};
-use dwrc_psx::gpu::UiRules;
+use dwrc_psx::gpu::{Backdrop, UiRules};
 use dwrc_psx::{HookAction, Psx};
 
 /// Whether a game is shown in widescreen when it is switched on.
@@ -90,6 +90,14 @@ fn gcd(a: u32, b: u32) -> u32 {
 /// untextured, so untextured shapes are not UI there. The world map's labels
 /// share page 5 and its CLUT rows with the dungeon walls, so they stay.
 ///
+/// Digimon World 2003's memory card screens (load, save) draw their panel
+/// on pages 10 and 11 (CLUT rows 202-205 and 209-210), which hold the screen's
+/// tiled background too (rows 206-208); without the panel its text, alone
+/// near the left edge, went out to the edge. Its item and equipment screens
+/// draw their panels and tiled background on pages 26 and 27 (rows 502-504):
+/// all of it is UI there, and the background's tiles, past both edges, keep
+/// the screen in place.
+///
 /// Digimon World 1 shares texture pages between its HUD and the map, so it
 /// goes by page and CLUT row: the clock (page 30, rows 496-499), the field
 /// status bars (page 5, rows 498-503), the battle command icon (page 31,
@@ -97,20 +105,41 @@ fn gcd(a: u32, b: u32) -> u32 {
 /// battle text such as "Your Call" (page 27). The enemy's HP readout floats
 /// over it in the scene (page 31 row 499, digits on page 22 row 496, outline
 /// in lines), so it is left out. Map tiles are on rows 480-486, models on
-/// 488-495. Its windows are untextured (a battle command window spans the
-/// screen, so what it covers stays with it).
+/// 488-495 (other pages). Page 5 rows 488-495 hold item icons (shop and
+/// bank lists) and window labels ("MENU", "PRICE", tabs), UI when flat and
+/// bigger than 8×8: the windows' corners on row 492 are 5×5 pieces, which
+/// follow their window as frame pieces. Items lying in the field use the
+/// same icons; a hook marks those as scene (`install_item_sprites`). Its
+/// windows are untextured (a battle command window spans the screen, so what
+/// it covers stays with it).
 pub fn ui_rules(game: GameId) -> Option<UiRules> {
     match game {
-        GameId::Dw3 => Some(UiRules { pages: vec![(Some(5), 0, 511, 0, false), (Some(6), 0, 511, 0, false), (Some(8), 0, 511, 0, false)], untextured: true, flat_polygons: true, insets: true, stretch: true }),
+        GameId::Dw3 => Some(UiRules {
+            pages: vec![
+                (Some(5), 0, 511, 0, false, 0),
+                (Some(6), 0, 511, 0, false, 0),
+                (Some(8), 0, 511, 0, false, 0),
+                (Some(10), 202, 205, 0, true, 0),
+                (Some(10), 209, 210, 0, true, 0),
+                (Some(11), 202, 205, 0, true, 0),
+                (Some(11), 209, 210, 0, true, 0),
+                (Some(26), 502, 504, 0, true, 0),
+                (Some(27), 502, 504, 0, true, 0),
+            ],
+            untextured: true,
+            flat_polygons: true,
+            insets: true,
+            stretch: true,
+        }),
         GameId::Dw2 => Some(UiRules {
-            pages: vec![(Some(7), 0, 511, 48, true), (Some(15), 0, 511, 48, true), (Some(12), 248, 248, 0, false), (Some(12), 249, 253, 24, false), (Some(30), 0, 511, 0, true)],
+            pages: vec![(Some(7), 0, 511, 48, true, 0), (Some(15), 0, 511, 48, true, 0), (Some(12), 248, 248, 0, false, 0), (Some(12), 249, 253, 24, false, 0), (Some(30), 0, 511, 0, true, 0)],
             untextured: false,
             flat_polygons: false,
             insets: false,
             stretch: false,
         }),
         GameId::Dw1 => Some(UiRules {
-            pages: vec![(Some(30), 491, 499, 0, false), (Some(5), 496, 511, 0, false), (Some(31), 496, 498, 0, false), (Some(27), 0, 511, 0, false)],
+            pages: vec![(Some(30), 491, 499, 0, false, 0), (Some(5), 496, 511, 0, false, 0), (Some(31), 496, 498, 0, false, 0), (Some(27), 0, 511, 0, false, 0), (Some(5), 488, 495, 0, true, 8)],
             untextured: true,
             flat_polygons: false,
             insets: false,
@@ -119,10 +148,22 @@ pub fn ui_rules(game: GameId) -> Option<UiRules> {
     }
 }
 
+/// The backdrops a game tiles behind its screens with only as many tiles as
+/// its 4:3 picture needs (see `Backdrop`): Digimon World 2003's item and
+/// equipment screens scroll nine columns of 48×48 tiles (page 27, CLUT rows
+/// 502-503) whose pictures repeat every second column.
+pub fn backdrops(game: GameId) -> Vec<Backdrop> {
+    match game {
+        GameId::Dw3 => vec![Backdrop { page: 27, rows: (502, 503), size: (48, 48), period: 96 }],
+        _ => Vec::new(),
+    }
+}
+
 /// Switches widescreen on or off, with Widescreen UI when `ui` is set and
 /// the game's UI is known (it lasts across resets, and can change at any time).
 pub fn apply(psx: &mut Psx, game: GameId, w: Widescreen, ui: bool) {
     psx.bus.gpu.set_widescreen_ui(if ui { ui_rules(game) } else { None });
+    psx.bus.gpu.set_widescreen_backdrops(backdrops(game));
     psx.bus.gpu.set_widescreen(w.widening());
 }
 
@@ -542,12 +583,49 @@ fn install_field_tiles(psx: &mut Psx, exe: &PsxExe) -> bool {
     true
 }
 
+/// Where Digimon World 1's `renderOverworldItem` (dw_decomp; `0x800C4E94`
+/// on SLUS-01032) adds an item lying in the field to the drawing list (its
+/// `AddPrim` call, `a1` the primitive): found from where it sets the
+/// sprite's texture page and passes the item's type (`li v0, 5; sh v0,
+/// 22(s0)`, then `lw a1, 8(s2)` within two words, once in each executable),
+/// as the `jal` next to the first `addiu s0, a1, 40` after it.
+fn find_item_sprite(exe: &PsxExe) -> Option<u32> {
+    let words = code_words(exe);
+    let at = (0..words.len().saturating_sub(4)).find(|&i| words[i] == 0x2402_0005 && words[i + 1] == 0xA602_0016 && words[i + 2..i + 4].contains(&0x8E45_0008))?;
+    let next = (at..(at + 96).min(words.len() - 1)).find(|&i| words[i] == 0x24B0_0028)?;
+    let jal = |i: usize| words[i] >> 26 == 3;
+    let call = if jal(next - 1) { next - 1 } else if jal(next + 1) { next + 1 } else { return None };
+    Some(exe.load_addr + 4 * call as u32)
+}
+
+/// Digimon World 1 draws items lying in the field with the item icons of its
+/// menus (a UI texture), scaled and sorted among the scene's models; Widescreen
+/// UI would move one near an edge out with the HUD, off its shadow, until the
+/// camera brought it away from the edge. The hook tells the GPU each one
+/// belongs to the scene.
+fn install_item_sprites(psx: &mut Psx, exe: &PsxExe) -> bool {
+    let Some(addr) = find_item_sprite(exe) else {
+        log::warn!("widescreen: Digimon World 1's field item sprites not found; with Widescreen UI, items near an edge may move with the HUD");
+        return false;
+    };
+    psx.bus.add_hook(
+        addr,
+        Box::new(|cpu, bus| {
+            bus.gpu.add_wide_scene(cpu.regs[5]);
+            HookAction::Continue
+        }),
+    );
+    true
+}
+
 /// Installs what widescreen needs in a game's own code: Digimon World 1's
-/// field scroll limits and field tiles. Both do nothing while widescreen is off.
+/// field scroll limits, field tiles and field items. All do nothing while
+/// widescreen is off.
 pub fn install_hooks(psx: &mut Psx, game: GameId, exe: &PsxExe) {
     if game == GameId::Dw1 {
         install_scroll_limits(psx, game, exe);
         install_field_tiles(psx, exe);
+        install_item_sprites(psx, exe);
     }
 }
 
@@ -611,6 +689,21 @@ mod tests {
         bus.poke16(high, 256);
         assert_eq!(at(bus, 32, 53, true), (false, 32, 288));
         assert_eq!(at(bus, 32, 53, false), (true, 32, 0x7777));
+    }
+
+    /// `renderOverworldItem`'s `AddPrim` call, laid out as on the USA
+    /// executable (`jal` before `addiu s0, a1, 40`) and on the European and
+    /// Japanese ones (after it); and not without the item's type load.
+    #[test]
+    fn item_sprite_hook() {
+        let head = [0x2402_0005, 0xA602_0016, 0x8E45_0008, 0x0C03_977F, 0x0200_2021, 0, 0];
+        let us: Vec<u32> = head.iter().copied().chain([0x0200_2821, 0x0C02_4AB5, 0x24B0_0028, 0x0C02_630A]).collect();
+        assert_eq!(find_item_sprite(&exe_of(&us)), Some(0x8001_0000 + 4 * 8));
+        let eu: Vec<u32> = head.iter().copied().chain([0x0200_2821, 0x24B0_0028, 0x0C02_5549, 0]).collect();
+        assert_eq!(find_item_sprite(&exe_of(&eu)), Some(0x8001_0000 + 4 * 9));
+        let mut other = us.clone();
+        other[2] = 0x8E45_000C;
+        assert_eq!(find_item_sprite(&exe_of(&other)), None);
     }
 
     /// An executable of `words` at 0x80010000.

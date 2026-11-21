@@ -95,8 +95,9 @@ pub struct UiRules {
     /// shares between small UI pieces and big scenery; whether only
     /// unshaded pieces count: a page shared with Gouraud-shaded 3D models).
     /// Pages are GP0 texpage bits 0-4: x in units of 64 halfwords, bit 4 =
-    /// the lower half of VRAM.
-    pub pages: Vec<(Option<u8>, u16, u16, u16, bool)>,
+    /// the lower half of VRAM. Last, the smallest piece: pieces no bigger
+    /// than this both ways don't count (0: any; a window's corners).
+    pub pages: Vec<(Option<u8>, u16, u16, u16, bool, u16)>,
     /// Untextured shapes (bar fills, panels) are UI, except screen layers.
     pub untextured: bool,
     /// Untextured flat-shaded polygons count among them (Digimon World 1
@@ -201,6 +202,14 @@ impl Canvas {
             .iter()
             .find(|(g, _, _)| b[0] >= g[0] && b[1] <= g[1] && b[2] >= g[2] && b[3] <= g[3])
             .map(|(_, dx, s)| (*dx, *s))
+            // A piece no group holds yet on a window drawn before it in this
+            // picture (a window just opened: its contents go with it, not by
+            // their own place; Digimon World 1's item list beside the left edge).
+            .or_else(|| {
+                let window = |g: &[i32; 4]| g[1] - g[0] >= 15 && g[3] - g[2] >= 15;
+                let holds = |g: &[i32; 4]| g[0] - 2 <= b[0] && b[1] <= g[1] + 2 && g[2] - 2 <= b[2] && b[3] <= g[3] + 2;
+                self.drawn.iter().rev().find(|(g, _)| *g != b && window(g) && holds(g)).map(|&(_, dx)| (dx, None))
+            })
             // A piece seen before, in pictures since forgotten (the field HUD
             // back after a battle or a talk, or after a save state load).
             .or_else(|| seen.get(&(self.width(), self.y2 - self.y1 + 1, b)).map(|&d| (d as i32 * m, None)))
@@ -238,17 +247,21 @@ impl Canvas {
     }
 
     /// How far a piece of a window's frame moves (`b`: a line, or a small
-    /// unshaded piece that is not UI): with the window, when the last UI
-    /// piece was a window (at least 16×16), drawn at most `FRAME_RUN`
-    /// primitives before, and `b` lies on it or hugs it. Digimon World 1
-    /// draws a window as a rectangle, then its border in lines, its corners
-    /// in small pieces and its cursor in lines; effects in the scene that
-    /// pass over the HUD are drawn apart from it and stay.
+    /// unshaded piece that is not UI): with the window it lies on or hugs,
+    /// the latest UI piece of at least 16×16 drawn in this picture that does
+    /// (pieces drawn on the window since, like its text, icons and cursor
+    /// bar, don't count), when the last UI piece was drawn at most `FRAME_RUN`
+    /// primitives before. Digimon World 1 draws a window as a rectangle, then
+    /// its border in lines, its corners in small pieces, its contents, and
+    /// lines in it (a scroll bar, the shop's amount box's rules); effects in
+    /// the scene that pass over the HUD are drawn apart from it and stay.
     fn frame_shift(&self, b: [i32; 4]) -> i32 {
-        let Some(&(g, dx)) = self.drawn.last() else { return 0 };
-        let window = g[1] - g[0] >= 15 && g[3] - g[2] >= 15;
-        let on = b[0] >= g[0] - FRAME && b[1] <= g[1] + FRAME && b[2] >= g[2] - FRAME && b[3] <= g[3] + FRAME;
-        if window && on && self.since_ui <= FRAME_RUN { dx } else { 0 }
+        if self.since_ui > FRAME_RUN {
+            return 0;
+        }
+        let window = |g: &[i32; 4]| g[1] - g[0] >= 15 && g[3] - g[2] >= 15;
+        let on = |g: &[i32; 4]| b[0] >= g[0] - FRAME && b[1] <= g[1] + FRAME && b[2] >= g[2] - FRAME && b[3] <= g[3] + FRAME;
+        self.drawn.iter().rev().find(|(g, _)| window(g) && on(g)).map_or(0, |&(_, dx)| dx)
     }
 
     /// Vblank: the groups are made again from the recent pieces.
@@ -320,7 +333,11 @@ fn small(q: [i32; 4]) -> bool {
 fn anchor(b: [i32; 4], width: i32, margin: i32) -> (i32, bool) {
     // Clearly on one side: near that edge, and its gap there at least EDGE
     // smaller than on the other side (a nearly centred box stays).
+    // Near both edges (a panel across the screen, maybe drawn on past one edge) stays.
     let (gl, gr) = (b[0], width - 1 - b[1]);
+    if gl <= EDGE && gr <= EDGE {
+        return (0, false);
+    }
     let (left, right) = (b[0] <= EDGE && gr - gl >= EDGE, b[1] >= width - 1 - EDGE && gl - gr >= EDGE);
     match (left, right) {
         (true, false) => (-margin, b[1] > width / 2 + EDGE),
@@ -433,6 +450,8 @@ fn anchored_groups(items: &[([i32; 4], u64)], width: i32, margin: i32) -> Vec<([
 fn group_boxes(items: &[([i32; 4], u64)]) -> Vec<([i32; 4], u64)> {
     let boxes: Vec<[i32; 4]> = items.iter().map(|(b, _)| *b).collect();
     let n = boxes.len();
+    // Boxes that can hold others (windows, panels), for `covered` below.
+    let holders: Vec<usize> = (0..n).filter(|&i| boxes[i][1] - boxes[i][0] >= 15 && boxes[i][3] - boxes[i][2] >= 15).collect();
     let mut parent: Vec<usize> = (0..n).collect();
     fn root(p: &mut [usize], mut i: usize) -> usize {
         while p[i] != i {
@@ -453,7 +472,13 @@ fn group_boxes(items: &[([i32; 4], u64)]) -> Vec<([i32; 4], u64)> {
             // drawn right after the HUD it covers is not part of it).
             let inside = |p: [i32; 4], q: [i32; 4]| (p[0] >= q[0] && p[1] <= q[1] && p[2] >= q[2] && p[3] <= q[3]) || on(p, q);
             let nested = inside(a, b) || inside(b, a);
-            if (items[i].1.abs_diff(items[j].1) <= RUN && !nested) || (overlap <= SLIVER && !small(a) && !small(b)) {
+            // A piece drawn on a window doesn't join one drawn before the
+            // window, under it (Digimon World 1's battle item menu: its cursor
+            // bar and first item names, drawn on the window beside the HUD
+            // icons the window covers, would take the HUD's move).
+            let (early, late) = if items[i].1 < items[j].1 { (i, j) } else { (j, i) };
+            let covered = || holders.iter().any(|&w| items[w].1 > items[early].1 && items[w].1 < items[late].1 && boxes[w] != boxes[late] && inside(boxes[late], boxes[w]));
+            if ((items[i].1.abs_diff(items[j].1) <= RUN && !nested) || (overlap <= SLIVER && !small(a) && !small(b))) && !covered() {
                 let (ri, rj) = (root(&mut parent, i), root(&mut parent, j));
                 parent[ri] = rj;
             }
@@ -501,6 +526,9 @@ pub(super) struct Wide {
     /// Pictures to draw beside primitives not drawn yet, by DMA packet
     /// address, with the vblanks since each was given.
     beside: Vec<(u32, u32, Beside)>,
+    /// Primitives that are part of the scene whatever their texture, by DMA
+    /// packet address, with the vblanks since each was given.
+    scene: Vec<(u32, u32)>,
 }
 
 /// A picture beside a primitive, in the margins only: the primitive drawn
@@ -516,8 +544,26 @@ pub struct Beside {
     pub texels: Vec<u16>,
 }
 
+/// A backdrop a game tiles behind a screen, repeating every `period` pixels
+/// across: sprites of exactly `size` (width, height) on texture page `page`
+/// with a CLUT row in `rows`. The game draws only as many tiles as its 4:3
+/// screen needs (Digimon World 2003's item screens: nine columns of 48×48
+/// tiles that scroll, so the left or right strip is bare half the time).
+/// With widescreen on, each tile is drawn again a period (and two) to each
+/// side, into the strips only: the picture between them stays the console's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Backdrop {
+    pub page: u8,
+    pub rows: (u16, u16),
+    pub size: (i32, i32),
+    pub period: i32,
+}
+
 /// Vblanks a picture given for a primitive waits for it to be drawn.
 const BESIDE_WAIT: u32 = 8;
+/// Vblanks a scene mark waits for its primitive (shorter: the packet's
+/// address soon holds another primitive).
+const SCENE_WAIT: u32 = 4;
 
 /// How to draw a piece in the second pass: up to two (move, clip) pairs;
 /// the clip is a column range, in area coordinates or (from `side_begin`)
@@ -573,11 +619,62 @@ impl Gpu {
         }
     }
 
+    /// Sets the game's repeating backdrops (see `Backdrop`); kept while
+    /// widescreen is off.
+    pub fn set_widescreen_backdrops(&mut self, backdrops: Vec<Backdrop>) {
+        self.backdrops = backdrops;
+    }
+
+    pub fn widescreen_backdrops(&self) -> Vec<Backdrop> {
+        self.backdrops.clone()
+    }
+
+    /// How far to draw a sprite again beside itself, if it is a tile of a
+    /// backdrop (see `Backdrop`): ± one period, and two when the strips are
+    /// wider than a period.
+    pub(super) fn backdrop_copies(&self, clut: u32, size: (i32, i32)) -> Vec<i32> {
+        let Some(w) = self.wide.as_ref() else { return Vec::new() };
+        let (page, row) = ((self.texpage & 0x1F) as u8, ((clut >> 6) & 0x1FF) as u16);
+        let Some(b) = self.backdrops.iter().find(|b| b.page == page && row >= b.rows.0 && row <= b.rows.1 && b.size == size) else { return Vec::new() };
+        let m = margin((self.draw_x2 - self.draw_x1 + 1).max(0) as u32, w.num, w.den) as i32;
+        let reps = (m + b.period - 1) / b.period.max(1);
+        (1..=reps.max(1)).flat_map(|k| [-k * b.period, k * b.period]).collect()
+    }
+
     /// Forgets what the canvases hold (after a save state load or a reset).
     pub fn clear_widescreen(&mut self) {
         if let Some(w) = &mut self.wide {
             w.canvases.clear();
             w.beside.clear();
+            w.scene.clear();
+        }
+    }
+
+    /// Tells Widescreen UI that the primitive in the DMA packet at `packet`
+    /// (a RAM address) belongs to the scene, though drawn with a texture of the
+    /// UI: Digimon World 1 draws items lying in the field with its menus' item
+    /// icons, scaled and sorted among the scene's models. Without this, one
+    /// near an edge would be moved off its shadow with the HUD.
+    pub fn add_wide_scene(&mut self, packet: u32) {
+        let Some(w) = self.wide.as_mut().filter(|w| w.ui.is_some()) else { return };
+        let packet = 0x8000_0000 | (packet & 0x1F_FFFC);
+        if !w.scene.iter().any(|(p, _)| *p == packet) && w.scene.len() < 64 {
+            w.scene.push((packet, 0));
+        }
+    }
+
+    /// Whether the primitive being drawn was given by `add_wide_scene` (once).
+    pub(super) fn take_wide_scene(&mut self) -> bool {
+        let packet = self.packet_addr;
+        match &mut self.wide {
+            Some(w) if packet != 0 => match w.scene.iter().position(|(p, _)| *p == packet) {
+                Some(i) => {
+                    w.scene.swap_remove(i);
+                    true
+                }
+                None => false,
+            },
+            _ => false,
         }
     }
 
@@ -626,7 +723,7 @@ impl Gpu {
             Some(r) if textured => {
                 let (page, row) = ((self.texpage & 0x1F) as u8, ((clut >> 6) & 0x1FF) as u16);
                 let fits = |m: u16| m == 0 || (size.0 <= m as i32 && size.1 <= m as i32);
-                r.pages.iter().any(|&(p, a, b, m, flat)| p.is_none_or(|p| p == page) && row >= a && row <= b && fits(m) && !(flat && shaded))
+                r.pages.iter().any(|&(p, a, b, m, flat, min)| p.is_none_or(|p| p == page) && row >= a && row <= b && fits(m) && !(flat && shaded) && (size.0 > min as i32 || size.1 > min as i32))
             }
             Some(r) => r.untextured && !layer && (r.flat_polygons || shaded || !polygon),
         }
@@ -719,6 +816,7 @@ impl Gpu {
         self.side = Some(Side { canvas, lo: x1 - m, hi: x2 + m, x1, x2, full, lo0: x1 - m, hi0: x2 + m });
         if let Some(p) = self.trace.as_mut().and_then(|t| t.last_mut()) {
             p.shift = draws[0].map(|d| d.0);
+            p.ui = ui;
         }
         Some(draws)
     }
@@ -778,6 +876,10 @@ impl Gpu {
                 *age += 1;
             }
             w.beside.retain(|(_, age, _)| *age <= BESIDE_WAIT);
+            for (_, age) in &mut w.scene {
+                *age += 1;
+            }
+            w.scene.retain(|(_, age)| *age <= SCENE_WAIT);
         }
     }
 
@@ -924,6 +1026,8 @@ mod tests {
         assert_eq!(anchor([10, 100, 0, 20], 320, 53), (-53, false));
         assert_eq!(anchor([200, 310, 0, 20], 320, 53), (53, false));
         assert_eq!(anchor([0, 319, 200, 239], 320, 53), (0, false));
+        // Across the screen and drawn on past the right edge (Digimon World 2003's item screen).
+        assert_eq!(anchor([15, 361, 165, 192], 320, 53), (0, false));
         // A nearly centred box reaching close to one edge stays.
         assert_eq!(anchor([37, 296, 160, 220], 320, 53), (0, false));
         assert_eq!(anchor([100, 200, 0, 20], 320, 53), (0, false));
@@ -962,6 +1066,18 @@ mod tests {
         // Name tags at the left edge, HP boxes 3 pixels to their right.
         let g = anchored_groups(&[([16, 100, 76, 92], 1), ([103, 197, 76, 108], 2)], 320, 53);
         assert!(g.iter().all(|(_, dx, _)| *dx == -53), "{g:?}");
+    }
+
+    #[test]
+    fn a_cursor_on_a_window_does_not_join_the_hud_under_it() {
+        // Digimon World 1's battle item menu: the command icons at the left
+        // edge, the window across the screen over them, then the cursor bar
+        // on the window touching the icons, all within a few pieces.
+        // The first item's icon and name, drawn later, beside an icon.
+        let items = [([17, 35, 20, 42], 1), ([12, 307, 19, 125], 2), ([16, 152, 24, 40], 3), ([18, 34, 60, 76], 20), ([36, 133, 26, 38], 40)];
+        let g = anchored_groups(&group_boxes(&items), 320, 53);
+        let dx = |x: i32| g.iter().find(|(b, _, _)| b[0] == x).unwrap().1;
+        assert_eq!((dx(17), dx(16), dx(18), dx(36)), (-53, 0, 0, 0), "{g:?}");
     }
 
     #[test]
@@ -1072,6 +1188,34 @@ mod tests {
     }
 
     #[test]
+    fn a_backdrop_tile_is_repeated_into_the_strips() {
+        let mut gpu = Gpu::new(crate::VideoStandard::Ntsc);
+        gpu.set_widescreen(Some((4, 3)));
+        gpu.set_widescreen_backdrops(vec![Backdrop { page: 16, rows: (480, 480), size: (16, 16), period: 32 }]);
+        for v in [0xE100_0000, 0xE300_0000, 0xE400_0000 | 239 << 10 | 319, 0xE500_0000] {
+            gpu.gp0(v);
+        }
+        // A 15-bit texture at VRAM (0, 256) of one colour; CLUT row 480 (unused at 15 bits, but it names the backdrop).
+        for y in 256..272 {
+            gpu.vram[y * VRAM_W..][..16].fill(0x001F);
+        }
+        gpu.gp0(0xE100_0000 | 2 << 7 | 1 << 4);
+        // A 16×16 tile at x 4: drawn again a period and two to the left (x -28, -60: the strip is
+        // wider than a period) and not to the right (x 36, 68: inside the area).
+        for v in [0x6480_8080, 10 << 16 | 4, 480 << 22, 16 << 16 | 16] {
+            gpu.gp0(v);
+        }
+        let (_, row) = gpu.wide_row(0, 0, 320, 53).unwrap();
+        let r = row(12);
+        // Margin column c is x c - 53: the copies cover x -60..-45 (columns 0..=8) and -28..-13 (25..=40).
+        let tile = |c: &u16| c & 0x7FFF == 0x001F;
+        assert!(r[..9].iter().all(tile) && r[25..41].iter().all(tile), "{:?}", &r[..53]);
+        assert!(r[9..25].iter().all(|&p| p == 0) && r[41..53].iter().all(|&p| p == 0), "{:?}", &r[..53]);
+        // The area itself is the console's: only the tile at x 4.
+        assert!(gpu.vram[12 * VRAM_W + 36..][..16].iter().all(|&p| p == 0));
+    }
+
+    #[test]
     fn a_box_lined_up_under_a_window_stays_with_it() {
         // Digimon World 1's naming screen: the letter window across the screen,
         // and the name box under it, level with its left side.
@@ -1098,9 +1242,13 @@ mod tests {
         assert_eq!(c.frame_shift([20, 24, 190, 194]), 0);
         c.since_ui = 1;
         assert_eq!(c.frame_shift([200, 204, 190, 194]), 0);
-        // After a small UI piece (a letter), nothing follows it.
+        // After a small UI piece (a letter) on it, a line in it still follows the window.
         c.drawn.push(([30, 37, 190, 201], -53));
-        assert_eq!(c.frame_shift([31, 36, 202, 202]), 0);
+        assert_eq!(c.frame_shift([31, 36, 202, 202]), -53);
+        // A line in a window under a later one (a scroll bar after the cursor bar and icons).
+        c.drawn.push(([100, 279, 40, 56], 53));
+        c.drawn.push(([113, 129, 58, 74], 53));
+        assert_eq!(c.frame_shift([140, 140, 190, 210]), -53);
     }
 
     #[test]

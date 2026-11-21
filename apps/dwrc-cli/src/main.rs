@@ -476,7 +476,7 @@ fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button
             ["gpulog", n, path] => {
                 // Every primitive drawn over N frames: frame, packet address, GP0 command,
                 // x0 x1 y0 y1 (VRAM coordinates), drawing area x1 y1 x2 y2, CLUT<<16|texpage,
-                // widescreen shift of the second pass ("-": none).
+                // widescreen shift of the second pass ("-": none; "u" after it: a UI piece).
                 use std::fmt::Write as _;
                 let mut out = String::new();
                 for _ in 0..num(n)? {
@@ -485,7 +485,7 @@ fn serve(psx: &mut Psx, mods: &mut dwrc_mods::ModRuntime, script: &[(u64, Button
                     let _ = writeln!(out, "{frame} display {} {}", psx.bus.gpu.display_x, psx.bus.gpu.display_y);
                     for p in psx.bus.gpu.trace.take().unwrap_or_default() {
                         let a = p.area;
-                        let shift = p.shift.map_or("-".to_string(), |d| d.to_string());
+                        let shift = p.shift.map_or("-".to_string(), |d| d.to_string()) + if p.ui { "u" } else { "" };
                         let _ = writeln!(out, "{frame} {:08x} {:02x} {} {} {} {} {} {} {} {} {:08x} {shift}", p.addr, p.op, p.x0, p.x1, p.y0, p.y1, a[0], a[1], a[2], a[3], p.tex);
                     }
                 }
