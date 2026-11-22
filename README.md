@@ -39,14 +39,14 @@ Your discs are never copied or modified. Saves (memory cards), settings, screens
 
 ### Controls
 
-| PlayStation | Keyboard (default) | Gamepad |
+| PlayStation | Keyboard (default) | Gamepad (default) |
 |---|---|---|
 | D-pad | Arrow keys | D-pad / left stick |
-| ✕ / ○ / □ / △ | X / C / Z / S | South / East / West / North |
+| ✕ / ○ / □ / △ | X / C / Z / S | South / East / West / North (A / B / X / Y on an Xbox pad) |
 | Start / Select | Enter / Backspace | Start / Back |
 | L1 / L2 / R1 / R2 | A / Q / D / E | Bumpers / triggers |
 
-Keys can be rebound in **Settings → Controls**.
+Keys and gamepad buttons can be rebound in **Settings → Controls**: click a binding, then press a key, or a button on the gamepad (a stick direction works too). Esc cancels; Delete clears a gamepad binding. Giving a gamepad button to a second PlayStation button swaps the two, so one press never means two buttons. **Left stick moves like the D-pad** (on by default) keeps the stick working whatever the D-pad is bound to. The first gamepad connected plays.
 
 **Mouse:** in Digimon World 1 and Digimon World 2003 you can also play by clicking the picture (**Settings → Controls → Mouse**, on by default). The keyboard and gamepad keep working alongside it. Each click becomes the button presses you would make on the pad, so the game plays exactly as it does with a pad.
 

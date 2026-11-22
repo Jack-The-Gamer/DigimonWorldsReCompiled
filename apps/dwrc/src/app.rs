@@ -65,6 +65,8 @@ pub struct App {
     show_pause: bool,
     show_mods_overlay: bool,
     rebinding: Option<Button>,
+    /// The button whose gamepad binding the controls editor is waiting for.
+    rebinding_pad: Option<Button>,
     fullscreen: bool,
     mods_ui: ModsUi,
     autostart: Option<GameId>,
@@ -137,6 +139,7 @@ impl App {
             show_pause: false,
             show_mods_overlay: false,
             rebinding: None,
+            rebinding_pad: None,
             fullscreen,
             autostart,
         }
@@ -829,23 +832,47 @@ impl App {
                     );
                 });
                 section(ui, "Controls", |ui| {
-                    ui.label(RichText::new("Click a binding, then press a key. Gamepads are detected automatically.").color(MUTED).small());
+                    ui.label(
+                        RichText::new(
+                            "Click a binding, then press a key or a gamepad button (or move a stick). Esc cancels, Delete clears a gamepad binding. Gamepads are detected automatically; the first one plays.",
+                        )
+                        .color(MUTED)
+                        .small(),
+                    );
                     let pads = self.input.gamepad_names();
                     ui.label(if pads.is_empty() { "No gamepad connected".to_string() } else { format!("Gamepad: {}", pads.join(", ")) });
-                    egui::Grid::new("keys").num_columns(4).spacing([16.0, 6.0]).show(ui, |ui| {
+                    egui::Grid::new("keys").num_columns(6).spacing([16.0, 6.0]).show(ui, |ui| {
+                        for _ in 0..2 {
+                            ui.label("");
+                            ui.label(RichText::new("Keyboard").color(MUTED).small());
+                            ui.label(RichText::new("Gamepad").color(MUTED).small());
+                        }
+                        ui.end_row();
                         for (i, b) in input::EDITABLE.iter().enumerate() {
                             let name = input::button_name(*b);
-                            let key = self.cfg.input.keyboard.get(&name).cloned().unwrap_or_else(|| "—".into());
                             ui.label(pretty_button(*b));
+                            let key = self.cfg.input.keyboard.get(&name).cloned().unwrap_or_else(|| "—".into());
                             let txt = if self.rebinding == Some(*b) { "press a key…".to_string() } else { key };
                             if ui.add(egui::Button::new(txt).min_size(Vec2::new(110.0, 0.0))).clicked() {
                                 self.rebinding = Some(*b);
+                                self.rebinding_pad = None;
+                            }
+                            let pad = self.cfg.input.gamepad.get(&name).map_or("—", |p| input::pad_label(p));
+                            let txt = if self.rebinding_pad == Some(*b) { "press a button…" } else { pad };
+                            if ui.add(egui::Button::new(txt).min_size(Vec2::new(130.0, 0.0))).clicked() {
+                                self.rebinding_pad = Some(*b);
+                                self.rebinding = None;
+                                self.input.flush();
                             }
                             if i % 2 == 1 {
                                 ui.end_row();
                             }
                         }
                     });
+                    changed |= ui
+                        .checkbox(&mut self.cfg.input.stick_dpad, "Left stick moves like the D-pad")
+                        .on_hover_text("The gamepad's left stick presses the D-pad directions too, alongside whatever they are bound to.")
+                        .changed();
                     let mouse = self.cfg.input.mouse;
                     ui.checkbox(&mut self.cfg.input.mouse, "Mouse").on_hover_text(
                         "Click the game's picture to play: left clicks pick what you click (menu options, tabs, battle commands) or press Confirm, right clicks open the menu or go back. Digimon World 1 and Digimon World 2003. The keyboard and gamepad keep working alongside it.",
@@ -891,6 +918,23 @@ impl App {
                         self.rebinding = None;
                     }
                 }
+                if let Some(b) = self.rebinding_pad {
+                    let (esc, del) = ctx.input(|i| (i.key_pressed(Key::Escape), i.key_pressed(Key::Delete)));
+                    if let Some(p) = self.input.capture() {
+                        input::bind_gamepad(&mut self.cfg.input.gamepad, b, p);
+                        changed = true;
+                        self.rebinding_pad = None;
+                    } else if del {
+                        self.cfg.input.gamepad.remove(&input::button_name(b));
+                        changed = true;
+                        self.rebinding_pad = None;
+                    } else if esc {
+                        self.rebinding_pad = None;
+                    } else {
+                        // Gamepads don't wake the window up: keep looking.
+                        ctx.request_repaint_after(Duration::from_millis(16));
+                    }
+                }
                 if changed {
                     self.audio.set_volume(if self.cfg.audio.muted { 0.0 } else { self.cfg.audio.volume });
                     self.save_cfg();
@@ -923,7 +967,7 @@ impl App {
         }
         // Input
         let overlay_open = self.show_pause || self.show_mods_overlay;
-        let pad = self.input.poll(ctx, &self.cfg.input.keyboard, !overlay_open);
+        let pad = self.input.poll(ctx, &self.cfg.input, !overlay_open);
         let emu = self.emu.as_ref().unwrap();
         emu.set_pad(0, if overlay_open { Default::default() } else { pad });
         let (esc, f10, f12, tab) =
@@ -1329,7 +1373,7 @@ impl eframe::App for App {
         if let Some(fs) = real_fs {
             self.fullscreen = fs;
         }
-        if f11 && self.rebinding.is_none() {
+        if f11 && self.rebinding.is_none() && self.rebinding_pad.is_none() {
             self.toggle_fullscreen(ctx);
         }
         if let Some(g) = self.autostart.take() {

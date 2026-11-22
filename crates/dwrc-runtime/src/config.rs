@@ -147,14 +147,47 @@ impl Default for EmulationConfig {
     }
 }
 
-/// Keyboard bindings: PlayStation button name -> key name (egui key names).
+/// Controls. Bindings map a PlayStation button name to the key or gamepad
+/// input that presses it; a button missing from a map is unbound there.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InputConfig {
+    /// PlayStation button name -> key name (egui key names).
     pub keyboard: BTreeMap<String, String>,
+    /// PlayStation button name -> gamepad input name (the launcher's
+    /// `input::PAD_INPUTS`: South, DPadUp, LeftShoulder, RightStickLeft, …),
+    /// read from the first gamepad connected.
+    pub gamepad: BTreeMap<String, String>,
+    /// The gamepad's left stick also moves like the D-pad, whatever the
+    /// D-pad buttons are bound to.
+    pub stick_dpad: bool,
     /// Mouse support: clicks on the picture press the buttons for what was
     /// clicked (see `mouse`), alongside the keyboard and gamepad.
     pub mouse: bool,
+}
+
+impl InputConfig {
+    /// The gamepad layout before bindings existed: buttons by position, as
+    /// on a PlayStation pad (South = Cross, East = Circle, …).
+    pub fn default_gamepad() -> BTreeMap<String, String> {
+        let pairs = [
+            ("Up", "DPadUp"),
+            ("Down", "DPadDown"),
+            ("Left", "DPadLeft"),
+            ("Right", "DPadRight"),
+            ("Cross", "South"),
+            ("Circle", "East"),
+            ("Square", "West"),
+            ("Triangle", "North"),
+            ("Start", "Start"),
+            ("Select", "Select"),
+            ("L1", "LeftShoulder"),
+            ("L2", "LeftTrigger"),
+            ("R1", "RightShoulder"),
+            ("R2", "RightTrigger"),
+        ];
+        pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+    }
 }
 
 impl Default for InputConfig {
@@ -175,7 +208,12 @@ impl Default for InputConfig {
             ("R1", "D"),
             ("R2", "E"),
         ];
-        Self { keyboard: pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(), mouse: true }
+        Self {
+            keyboard: pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
+            gamepad: Self::default_gamepad(),
+            stick_dpad: true,
+            mouse: true,
+        }
     }
 }
 
@@ -350,6 +388,8 @@ impl Default for UpdatesConfig {
 /// Settings file format version. 2: default R1 moved from W to E; mods
 /// switched to a shared load order with per-game answers. 3: default
 /// shoulder buttons moved to L1 A, L2 Q, R1 D, R2 E (were Q, A, E, D).
+/// (Gamepad bindings came later without a new version: files without them
+/// get the defaults, which are the layout gamepads had before.)
 pub const SETTINGS_VERSION: u32 = 3;
 
 /// The shoulder-button keys before settings version 3, and since.
@@ -476,6 +516,25 @@ mod tests {
         assert_eq!(keys("settings_version = 2\n[input.keyboard]\nL1 = \"Q\"\nL2 = \"A\"\nR1 = \"E\"\nR2 = \"F\"\n"), "Q A E F");
         // Already version 3: left alone, even if it matches the old defaults.
         assert_eq!(keys("settings_version = 3\n[input.keyboard]\nL1 = \"Q\"\nL2 = \"A\"\nR1 = \"E\"\nR2 = \"D\"\n"), "Q A E D");
+    }
+
+    #[test]
+    fn gamepad_bindings() {
+        // Files from before gamepad bindings get the layout gamepads always had.
+        let c = Config::from_toml("settings_version = 3\n[input.keyboard]\nCross = \"X\"\n").unwrap();
+        assert_eq!(c.input.gamepad, InputConfig::default_gamepad());
+        assert!(c.input.stick_dpad);
+        assert_eq!(c.input.gamepad["Cross"], "South");
+        // Rebound and unbound buttons survive a save and load.
+        let mut c = Config::default();
+        c.input.gamepad.insert("Cross".into(), "East".into());
+        c.input.gamepad.insert("Circle".into(), "South".into());
+        c.input.gamepad.remove("Select");
+        c.input.stick_dpad = false;
+        let again = Config::from_toml(&toml::to_string_pretty(&c).unwrap()).unwrap();
+        assert_eq!(again.input.gamepad, c.input.gamepad);
+        assert!(!again.input.gamepad.contains_key("Select"));
+        assert!(!again.input.stick_dpad);
     }
 
     #[test]
